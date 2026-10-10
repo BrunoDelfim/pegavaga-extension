@@ -336,13 +336,22 @@ pop-up (junto da edição ativa) e o histórico fica no
   - **Pular esta vaga** → o formulário é descartado e a vaga é **pulada de vez**
     (não gasta cota e não é visitada de novo); a varredura segue para a próxima.
 
-  O aviso fica na tela até você escolher (não expira sozinho), aparece no máximo
-  **uma vez por minuto** (para não virar enxurrada) e, se ninguém responder em
-  5 min, a extensão segue o caminho de sempre (a vaga fica `Formulário incompleto`/
-  `Travada em campo obrigatório` para a próxima passada). `Parar Varredura` encerra
-  a espera na hora. Este comportamento é **temporário**: sai quando os campos
-  personalizados forem tratados de verdade (tudo nele está marcado com
-  `TEMPORÁRIO` no código).
+  A recusa do LinkedIn é lida **a cada passo** — `aria-invalid`, `input:invalid` e
+  as mensagens de erro do formulário — e o "Avançar" que não sai do lugar conta
+  como recusa: a extensão tenta responder o que falta e, se o LinkedIn continuar
+  recusando, **pede o aviso em vez de martelar o botão** (antes disso, o
+  formulário era clicado até o limite de etapas e a vaga era descartada calada,
+  como `Formulário incompleto`).
+
+  O aviso fica na tela até você escolher (não expira sozinho) e, se ninguém
+  responder em 5 min, a extensão segue o caminho de sempre (a vaga fica `Travada
+  em campo obrigatório`/`Formulário incompleto` para a próxima passada). O de
+  **demora** aparece no máximo **uma vez por minuto** (para não virar enxurrada);
+  o de **campo recusado** tem só um respiro curto (**10 s**) entre um aviso e o
+  seguinte — é justamente o caso em que a vaga **não** pode ser descartada em
+  silêncio. `Parar Varredura` encerra a espera na hora. Este comportamento é
+  **temporário**: sai quando os campos personalizados forem tratados de verdade
+  (tudo nele está marcado com `TEMPORÁRIO` no código).
 - **Ritmo humano**: todo intervalo tem variação aleatória, o clique é precedido
   de rolagem + passagem de mouse pelo elemento, há pausas de “leitura” da vaga,
   pausas longas periódicas e a extensão **cede a vez** para você quando está

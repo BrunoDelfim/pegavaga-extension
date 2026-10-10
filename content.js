@@ -131,6 +131,10 @@
     ajudaPollMs: 500, // rede de segurança da espera (a resposta chega por mensagem)
     ajudaManualMs: 600000, // quanto esperamos você preencher à mão (10 min)
     ajudaIntervaloMs: 60000, // no máximo um aviso por minuto (evita enxurrada)
+    // Campo recusado pelo LinkedIn: cada vaga é um caso novo, e é justamente
+    // aqui que o aviso não pode ser engolido (a vaga seria descartada em
+    // silêncio). Vale só um respiro curto entre um aviso e o seguinte.
+    ajudaIntervaloCamposMs: 10000,
 
     /* Ritmo humano / furtividade */
     humanRatio: 0.3, // variação padrão aplicada aos intervalos
@@ -264,9 +268,22 @@
       '.artdeco-text-input--error',
       '.fb-dash-form-element--error',
       '[data-test-form-element-error]',
+      '[data-test-form-element-error-message]',
+      '.artdeco-inline-feedback__message--error',
+      /* Campo marcado pelo próprio navegador (`required` em branco ou formato
+       * fora do esperado): é o mesmo sinal que o LinkedIn usa para recusar o que
+       * respondemos. Sem ele, um campo inválido passava batido e a vaga era
+       * descartada em silêncio, sem o aviso na área de trabalho. */
+      'input:invalid',
+      'select:invalid',
+      'textarea:invalid',
     ],
     // Mensagem de erro escrita na própria tela (é o que explica o "invalid").
-    invalidText: ['.artdeco-inline-feedback__message', '[role="alert"]'],
+    invalidText: [
+      '.artdeco-inline-feedback__message',
+      '.artdeco-inline-feedback__message--error',
+      '[role="alert"]',
+    ],
   };
 
   /* ------------------------------------------------------------------------ */
@@ -1418,6 +1435,64 @@
   }
 
   /**
+   * "Assinatura da etapa" do formulário: o que a etapa pede (título, campos e
+   * botões) — de propósito **sem** as mensagens de erro, que o LinkedIn
+   * reescreve a cada clique.
+   *
+   * É com ela que sabemos se o "Avançar" realmente avançou. Comparar o texto
+   * inteiro da tela engana: quando o LinkedIn recusa um campo ele re-renderiza a
+   * mesma etapa com a mensagem de erro (e às vezes com um "carregando"), a
+   * assinatura muda sozinha e a contagem de tentativas nunca subiria — a vaga
+   * acabava descartada em silêncio, sem o aviso pedir ajuda.
+   */
+  function stepSignature(modal) {
+    if (!modal) return '';
+
+    let titulo = '';
+    let campos = '';
+    let botoes = '';
+
+    try {
+      const cabecalho = modal.querySelector('h1, h2, h3, legend');
+      titulo = cabecalho ? normalize(cabecalho.textContent || '') : '';
+    } catch (error) {
+      titulo = '';
+    }
+
+    try {
+      // Só atributos estáveis: o rótulo visível (via `fieldLabel`) pode incluir a
+      // mensagem de erro, e aí a assinatura voltaria a mudar à toa.
+      campos = Array.from(
+        modal.querySelectorAll('input, select, textarea, [role="combobox"], fieldset legend')
+      )
+        .map((campo) =>
+          normalize(
+            campo.getAttribute('name') ||
+              campo.getAttribute('id') ||
+              campo.getAttribute('aria-label') ||
+              campo.getAttribute('type') ||
+              ''
+          )
+        )
+        .join('|');
+    } catch (error) {
+      campos = '';
+    }
+
+    try {
+      const rodape = queryFirst(APPLY_SEL.footer, modal) || modal;
+      botoes = Array.from(rodape.querySelectorAll('button'))
+        .filter(isVisible)
+        .map((botao) => normalize(botao.textContent || botao.getAttribute('aria-label') || ''))
+        .join('|');
+    } catch (error) {
+      botoes = '';
+    }
+
+    return (titulo + '::' + campos + '::' + botoes).slice(0, 600);
+  }
+
+  /**
    * Espera a etapa parar de carregar. O caminho normal é o silêncio no DOM: o
    * LinkedIn para de mexer quando terminou de montar a tela, então esperamos
    * esse silêncio (não o tempo da internet). Se a página ficar nervosa e nunca
@@ -1601,10 +1676,14 @@
 
     try {
       for (const campo of queryAllUnique(APPLY_SEL.invalid, modal)) {
+        // Campo escondido (etapa que não está na tela) não trava nada: só o que
+        // o usuário vê conta como motivo.
+        if (!isVisible(campo)) continue;
         guarda(fieldLabel(campo) || campo.textContent);
       }
 
       for (const aviso of queryAllUnique(APPLY_SEL.invalidText, modal)) {
+        if (!isVisible(aviso)) continue;
         const texto = clean(aviso.textContent);
         if (texto && texto.length <= 80) guarda(texto);
       }
@@ -1661,7 +1740,16 @@
    */
   async function pedirAjuda(dados) {
     if (state.ajuda) return ''; // já há um aviso na tela: não empilha
-    if (Date.now() - state.ultimaAjuda < CONFIG.ajudaIntervaloMs) return '';
+
+    // O aviso de campo recusado não pode ser engolido pelo intervalo cheio: cada
+    // vaga é um caso novo (o LinkedIn recusou algo que só você sabe responder).
+    // O intervalo cheio fica para o aviso de "demora", que se repetiria à toa.
+    const intervalo =
+      dados && dados.motivo === 'demora'
+        ? CONFIG.ajudaIntervaloMs
+        : CONFIG.ajudaIntervaloCamposMs;
+
+    if (Date.now() - state.ultimaAjuda < intervalo) return '';
 
     const pedido = {
       id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
@@ -1671,7 +1759,15 @@
 
     const aviso = await avisarNoSistema(Object.assign({ pedidoId: pedido.id }, dados));
 
-    if (!aviso) return ''; // sem aviso na tela não faz sentido esperar
+    if (!aviso) {
+      // Sem aviso na tela não faz sentido esperar: quem chamou fecha a vaga e
+      // segue. Fica no console para dar para diagnosticar depois (permissão de
+      // notificação negada no sistema é o motivo mais comum).
+      console.warn(
+        '[PegaVaga] não consegui mostrar o aviso na área de trabalho; a vaga segue o caminho de sempre.'
+      );
+      return '';
+    }
     pedido.avisoId = aviso.id;
 
     state.ajuda = pedido;
@@ -2097,6 +2193,8 @@
     let steps = 0;
     let filled = [];
     let stalled = 0;
+    let etapa = ''; // assinatura da etapa atual (sem as mensagens de erro)
+    let tentativas = 0; // cliques em "Avançar" que não mudaram de etapa
 
     while (Date.now() < deadline && steps < CONFIG.applyMaxSteps) {
       if (state.abort) {
@@ -2155,6 +2253,15 @@
 
       await waitForSettle(modal, CONFIG.applySettleMs);
 
+      // A etapa (título + campos + botões, sem as mensagens de erro) mudou desde
+      // a última tentativa? Então o LinkedIn aceitou o que fizemos e a contagem
+      // de tentativas desta etapa começa de novo.
+      const etapaAgora = stepSignature(modal);
+      if (etapaAgora && etapaAgora !== etapa) {
+        etapa = etapaAgora;
+        tentativas = 0;
+      }
+
       let action = getModalAction(modal);
 
       // Sem botão principal: pergunta obrigatória pendente. Tentamos responder.
@@ -2187,11 +2294,44 @@
         }
       }
 
+      // O LinkedIn já recusou um campo desta etapa (o "Avançar" anterior não
+      // saiu do lugar)? Tentamos responder o que ainda dá e, se ele continuar
+      // recusando, pedimos ajuda na área de trabalho em vez de martelar o botão
+      // até estourar o limite de etapas — era assim que a vaga era descartada
+      // sozinha, sem aviso nenhum.
+      if (tentativas > 0) {
+        const recusados = invalidFields(modal);
+
+        if (recusados.length) {
+          filled = filled.concat(await fillPendingFields(modal, cfg));
+
+          const rejeitados = invalidFields(modal);
+
+          if (rejeitados.length) {
+            const missing = describeBlocker(modal).concat(rejeitados);
+            const ajuda = await resolverComAjuda(
+              modal,
+              ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+            );
+
+            if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+
+            await closeModal(modal, true);
+            return { status: 'travada', missing, filled, steps };
+          }
+        }
+      }
+
       const before = scopeSignature(modal);
       humanClick(action.button);
       steps += 1;
 
       const changed = await waitForStepChange(modal, before, CONFIG.applyStepWaitMs);
+
+      // Continuamos na mesma etapa? A tela pode ter mudado só por causa da
+      // mensagem de erro (o que engana o `changed`): quem manda aqui é a
+      // assinatura da etapa.
+      if (stepSignature(modal) === etapa) tentativas += 1;
 
       if (action.kind === 'submit') {
         // É o envio: esperamos a confirmação do LinkedIn aparecer (mesmo devagar).
@@ -2248,7 +2388,21 @@
       }
     }
 
-    const missing = describeBlocker(modal);
+    // Estourou o limite de etapas/tempo com um campo recusado na tela: antes de
+    // descartar, avisamos na área de trabalho — quem decide é você, não a
+    // contagem de etapas.
+    const recusadosNoFim = document.contains(modal) ? invalidFields(modal) : [];
+    const missing = describeBlocker(modal).concat(recusadosNoFim);
+
+    if (recusadosNoFim.length) {
+      const ajuda = await resolverComAjuda(
+        modal,
+        ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+      );
+
+      if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+    }
+
     await closeModal(modal, true);
     return { status: 'incompleta', missing, filled, steps };
   }

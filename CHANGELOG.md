@@ -127,3 +127,28 @@ da build).
   chaves `pegavaga_edicao`/`pegavaga_dev` — substituídas por sessão
   (`pegavaga_sessao`) e pelo cache do plano (`pegavaga_perfil`).
 - `tests/smoke-painel-teste.js`, substituído por `tests/smoke-conta.js`.
+
+### Corrigido
+
+- **(temporário) A vaga travada num campo recusado era descartada em silêncio, sem
+  o aviso na área de trabalho** (`content.js`): o formulário era clicado em
+  "Avançar" até estourar o limite de etapas e só então fechado, como `Formulário
+  incompleto`. Duas causas: (1) a espera por mudança de etapa comparava o **texto
+  inteiro** da tela e a mensagem de erro — que o LinkedIn reescreve a cada
+  clique — fazia a tela parecer que tinha mudado, então a contagem de tentativas
+  travadas nunca subia; (2) os sinais de campo inválido não eram lidos por
+  completo (`input:invalid`/`select:invalid`/`textarea:invalid` e as mensagens
+  `[data-test-form-element-error-message]`/`.artdeco-inline-feedback__message--error`
+  ficavam de fora). Agora a etapa tem assinatura própria (`stepSignature`: título +
+  campos + botões, **sem** as mensagens de erro), os campos recusados são checados
+  **a cada passo** — com `fillPendingFields` antes de decidir — e o aviso é pedido
+  assim que o LinkedIn continua recusando; o fim do laço (limite de etapas/tempo)
+  também pergunta antes de fechar, e a vaga fica `Travada em campo obrigatório`.
+- **O aviso de campo recusado não é mais engolido pelo intervalo de um por
+  minuto** (`content.js`): o intervalo cheio (`ajudaIntervaloMs`) continua valendo
+  para o aviso de **demora**; o de campo recusado usa um respiro curto
+  (`ajudaIntervaloCamposMs`, 10 s), porque cada vaga é um caso novo e ela era
+  descartada sem ninguém ser avisado. Quando a notificação não pode ser criada
+  (permissão de área de trabalho negada no sistema, por exemplo), o content script
+  avisa no **console do LinkedIn** — antes disso, a vaga era descartada sem deixar
+  rastro do motivo.
