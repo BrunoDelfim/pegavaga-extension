@@ -50,6 +50,11 @@ const cfg = S.parseSettings({
   baseUrl: 'https://www.linkedin.com/jobs/search/',
   apply: {
     enabled: true,
+    // O formulário pode mandar o que quiser: no free o motor impõe as cotas.
+    perTerm: 99,
+    perHour: 99,
+    per24h: 99,
+    perDay: 99,
     minDelayMs: 1000,
     maxDelayMs: 2000,
     respectUserActivity: false,
@@ -63,8 +68,11 @@ const cfg = S.parseSettings({
 });
 
 ok('termos cortados em 2', cfg.terms.length === 2 && cfg.terms.join() === 'a,b', JSON.stringify(cfg.terms));
+ok('free sem cotas editaveis', E.atual().limites.cotasEditaveis.length === 0, JSON.stringify(E.atual().limites.cotasEditaveis));
+ok('perTerm fixo 4', cfg.apply.perTerm === 4, String(cfg.apply.perTerm));
+ok('perHour fixo 3', cfg.apply.perHour === 3, String(cfg.apply.perHour));
 ok('per24h desligado (Infinity)', cfg.apply.per24h === Infinity, String(cfg.apply.per24h));
-ok('teto diario fixo = 20', cfg.apply.perDay === 20, String(cfg.apply.perDay));
+ok('teto diario fixo = 9', cfg.apply.perDay === 9, String(cfg.apply.perDay));
 ok('scanPerTerm fixo 40', cfg.apply.scanPerTerm === 40, String(cfg.apply.scanPerTerm));
 ok('minDelay fixo 4000', cfg.apply.minDelayMs === 4000, String(cfg.apply.minDelayMs));
 ok('maxDelay fixo 12000', cfg.apply.maxDelayMs === 12000, String(cfg.apply.maxDelayMs));
@@ -110,7 +118,13 @@ E.definir('free');
 const lib = E.aplicarDoServidor({
   rotulo: 'Premium',
   features: { export: true, scheduler: true },
-  limites: { maxTermos: 12, per24h: 50, cotasEditaveis: ['term', 'hour', 'day24', 'day'] },
+  limites: {
+    maxTermos: 12,
+    perTermFixo: 6,
+    perHourFixo: 5,
+    per24h: 50,
+    cotasEditaveis: ['term', 'hour', 'day24', 'day'],
+  },
 });
 
 ok('servidor: chave ativa = servidor', E.chaveAtiva() === 'servidor', E.chaveAtiva());
@@ -119,11 +133,13 @@ ok('servidor: rotulo do selo', lib.rotulo === 'Premium', lib.rotulo);
 
 const cs = S.parseSettings({
   terms: 'a,b,c,d,e,f,g,h,i,j,k,l,m',
-  apply: { minDelayMs: 1000, maxDelayMs: 2000, scanPerTerm: 25, per24h: 99 },
+  apply: { perTerm: 99, perHour: 99, minDelayMs: 1000, maxDelayMs: 2000, scanPerTerm: 25, per24h: 99 },
   schedule: { enabled: true },
 });
 
 ok('servidor: maxTermos 12 (da API)', cs.terms.length === 12, String(cs.terms.length));
+ok('servidor: perTerm fixo da API (6)', cs.apply.perTerm === 6, String(cs.apply.perTerm));
+ok('servidor: perHour fixo da API (5)', cs.apply.perHour === 5, String(cs.apply.perHour));
 ok('servidor: per24h da API (50)', cs.apply.per24h === 50, String(cs.apply.per24h));
 ok('servidor: scanPerTerm respeitado', cs.apply.scanPerTerm === 25, String(cs.apply.scanPerTerm));
 ok('servidor: minDelay do usuario', cs.apply.minDelayMs === 1000, String(cs.apply.minDelayMs));

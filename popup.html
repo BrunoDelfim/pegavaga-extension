@@ -468,11 +468,11 @@
           </label>
 
           <div class="grid3">
-            <div>
+            <div id="field-apply-per-term">
               <label for="apply-per-term">Por termo</label>
               <input id="apply-per-term" type="number" min="1" max="500" step="1" />
             </div>
-            <div>
+            <div id="field-apply-hour">
               <label for="apply-hour">Por hora</label>
               <input id="apply-hour" type="number" min="1" max="1000" step="1" />
             </div>
@@ -492,6 +492,8 @@
               <input id="apply-scan" type="number" min="1" max="500" step="1" />
             </div>
           </div>
+
+          <p class="hint" id="quota-fixed-hint" hidden></p>
 
           <p class="hint">
             Cotas dinâmicas: ao estourar uma delas o PegaVaga pausa e volta sozinho

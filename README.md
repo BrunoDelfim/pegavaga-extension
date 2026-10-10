@@ -53,9 +53,9 @@ Um só código-fonte, três usos:
 
 | Edição        | Como se obtém                | O que muda                                                                                                            |
 | ------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Free**      | instala e usa, **sem conta** | até **2 termos**; cotas **por hora** e **por termo** ajustáveis + **teto diário fixo** e "máx. vagas por termo" fixos no código; **sem** agendador e **sem** exportação (botão desabilitado) |
+| **Free**      | instala e usa, **sem conta** | até **2 termos**; cotas **fixas** de **4 por termo**, **3 por hora** e **9 por dia** (sem campos na UI) e "máx. vagas por termo" fixo no código; **sem** agendador e **sem** exportação (botão desabilitado) |
 | **Portfólio** | é a **mesma build** da free  | — (é a free, publicada como código aberto)                                                                            |
-| **Premium**   | conta + **assinatura ativa** | até 40 termos, cotas de 24 h/dia ajustáveis, agendador, ritmo humano ajustável e exportação — *(previsto)*             |
+| **Premium**   | conta + **assinatura ativa** | até 40 termos, cotas de termo/hora/24 h/dia ajustáveis, agendador, ritmo humano ajustável e exportação — *(previsto)*  |
 
 O que a **free** mantém, mesmo sem conta: a candidatura automática completa
 (Candidatura Simplificada + formulário obrigatório), a captura das vagas com

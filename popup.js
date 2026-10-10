@@ -139,9 +139,12 @@ function cacheElements() {
   // Elementos que só existem em certas edições (o perfil decide se aparecem).
   els.groupFurtividade = document.getElementById('group-furtividade');
   els.groupAgendador = document.getElementById('group-agendador');
+  els.fieldApplyPerTerm = document.getElementById('field-apply-per-term');
+  els.fieldApplyHour = document.getElementById('field-apply-hour');
   els.fieldApply24h = document.getElementById('field-apply-24h');
   els.fieldApplyDay = document.getElementById('field-apply-day');
   els.fieldApplyScan = document.getElementById('field-apply-scan');
+  els.quotaFixedHint = document.getElementById('quota-fixed-hint');
   els.termsLimitHint = document.getElementById('terms-limit-hint');
   els.buildInfo = document.getElementById('build-info');
 }
@@ -156,11 +159,27 @@ function versaoExtensao() {
 }
 
 /**
+ * Descreve as cotas que a edição impõe sozinha (as que não têm campo na UI).
+ * Devolve '' quando nada é fixo (no premium o usuário ajusta tudo).
+ */
+function descreverCotasFixas(limites) {
+  const fixas = limites || {};
+  const partes = [];
+
+  if (fixas.perTermFixo > 0) partes.push(fixas.perTermFixo + ' por termo');
+  if (fixas.perHourFixo > 0) partes.push(fixas.perHourFixo + ' por hora');
+  if (fixas.tetoDiarioFixo > 0) partes.push(fixas.tetoDiarioFixo + ' por dia');
+
+  if (!partes.length) return '';
+  return 'Cotas fixas nesta edição: ' + partes.join(' · ') + '.';
+}
+
+/**
  * Ajusta a cara da interface ao perfil da edição ativa: esconde o que a edição
- * não oferece (agendador, ritmo ajustável, cotas de 24 h/dia e o teto de vagas
- * por termo) e deixa a exportação visível porém desabilitada. A regra de verdade
- * está no shared.js/parseSettings — aqui é só para o free não mostrar o que não
- * pode usar.
+ * não oferece (agendador, ritmo ajustável, cotas de termo/hora/24 h/dia e o teto
+ * de vagas por termo) e deixa a exportação visível porém desabilitada. A regra de
+ * verdade está no shared.js/parseSettings — aqui é só para o free não mostrar o
+ * que não pode usar.
  */
 function aplicarPerfilNaUI() {
   const perfil = SHARED.perfilEdicao();
@@ -172,9 +191,18 @@ function aplicarPerfilNaUI() {
 
   exibir(els.groupAgendador, perfil.features.scheduler);
   exibir(els.groupFurtividade, perfil.features.furtividadeConfig);
+  exibir(els.fieldApplyPerTerm, cotas.includes('term'));
+  exibir(els.fieldApplyHour, cotas.includes('hour'));
   exibir(els.fieldApply24h, cotas.includes('day24'));
   exibir(els.fieldApplyDay, cotas.includes('day'));
   exibir(els.fieldApplyScan, perfil.features.scanConfig);
+
+  // Sem campo na tela, as cotas impostas pelo motor viram um aviso legível.
+  if (els.quotaFixedHint) {
+    const texto = descreverCotasFixas(perfil.limites);
+    els.quotaFixedHint.hidden = !texto;
+    els.quotaFixedHint.textContent = texto;
+  }
 
   // Exportação: o botão continua visível, mas desabilitado na edição que não
   // exporta (o free). O handler de clique recusa de novo — reativar o botão pelo

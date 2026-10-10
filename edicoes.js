@@ -44,10 +44,14 @@ globalThis.PegaVagaEdicoes = (() => {
       },
       limites: {
         maxTermos: 2,
-        // Cotas que o usuário consegue editar na UI (as demais o motor impõe).
-        cotasEditaveis: ['term', 'hour'],
+        // Nenhuma cota é editável no free: os campos saem da UI e o motor impõe
+        // os valores fixos em `aplicarPerfilEdicao` (o usuário não mexe em nada).
+        cotasEditaveis: [],
+        // Cotas fixas da edição (0 = o usuário ajusta na UI, como no premium).
+        perTermFixo: 4, // candidaturas por termo de busca
+        perHourFixo: 3, // janela móvel de 60 min
         // Teto diário imposto: não é campo, é regra da edição (0 = sem teto).
-        tetoDiarioFixo: 20,
+        tetoDiarioFixo: 9,
         // Teto de vagas visitadas por termo: trava de segurança fixa no free
         // (o campo "Máx. vagas por termo" não existe nesta edição).
         scanPerTermFixo: 40,
@@ -72,6 +76,8 @@ globalThis.PegaVagaEdicoes = (() => {
       limites: {
         maxTermos: 40,
         cotasEditaveis: ['term', 'hour', 'day24', 'day'],
+        perTermFixo: 0, // 0 = o usuário ajusta "Por termo"
+        perHourFixo: 0, // 0 = o usuário ajusta "Por hora"
         tetoDiarioFixo: 0, // o usuário escolhe a cota por dia
         scanPerTermFixo: 0, // 0 = o usuário ajusta "Máx. vagas por termo"
         per24h: 25,
@@ -136,7 +142,7 @@ globalThis.PegaVagaEdicoes = (() => {
 
     const limitesRemotos =
       fonte.limites && typeof fonte.limites === 'object' ? fonte.limites : {};
-    ['maxTermos', 'tetoDiarioFixo', 'scanPerTermFixo', 'per24h'].forEach((nome) => {
+    ['maxTermos', 'perTermFixo', 'perHourFixo', 'tetoDiarioFixo', 'scanPerTermFixo', 'per24h'].forEach((nome) => {
       if (Number.isFinite(limitesRemotos[nome])) limites[nome] = limitesRemotos[nome];
     });
     if (Array.isArray(limitesRemotos.cotasEditaveis)) {

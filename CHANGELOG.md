@@ -21,13 +21,13 @@ pronto para usar, e depois `1.1`, `2.0`…
   portfólio); desbloquear a premium não muda o código, muda o direito de uso.
 - **Regra de edição no funil único** (`shared.js`): o `parseSettings` passou a
   aplicar o perfil, então pop-up, content script e service worker obedecem ao
-  mesmo limite. No free: termos cortados em 2, cotas só por hora e por termo com
-  **teto diário fixo**, ritmo humano fixo, "máx. vagas por termo" fixo e agendador
-  desligado.
+  mesmo limite. No free: termos cortados em 2, cotas **fixas** de **4 por termo**,
+  **3 por hora** e **9 por dia**, ritmo humano fixo, "máx. vagas por termo" fixo e
+  agendador desligado.
 - **UI por edição** (`popup.js`/`popup.html`): o free não mostra o Agendador, a
-  Furtividade, as cotas de 24 h/dia nem "Máx. vagas por termo", e deixa a
-  exportação em CSV visível porém **desabilitada** (sem função) — e avisa o teto de
-  termos.
+  Furtividade, os campos de cota (termo/hora/24 h/dia) nem "Máx. vagas por termo",
+  e deixa a exportação em CSV visível porém **desabilitada** (sem função) — e avisa
+  o teto de termos e as cotas fixas.
 - **Encaixe da concessão por servidor** (`edicoes.js`): `aplicarDoServidor(perfil)`
   aplica os `features`/`limites` que a API devolver **depois de conta +
   assinatura** (é o que "libera campos e opções"), e `aplicarDoServidor(null)`
@@ -39,6 +39,11 @@ pronto para usar, e depois `1.1`, `2.0`…
 
 ### Alterado
 
+- **Cotas do free fixadas e reduzidas**: os campos "Por termo" e "Por hora" saíram
+  da UI (`cotasEditaveis: []`) e o motor impôs **4 por termo**, **3 por hora** e
+  **9 por dia** — o teto diário caiu de 20 para 9. O pop-up mostra só o aviso das
+  cotas fixas, e o `parseSettings` ignora o que o formulário mandar (a regra vale
+  no pop-up, no content script e no service worker).
 - **Regras do free revisadas**: termos **2** (antes 3); **"Máx. vagas por termo"**
   saiu da UI e virou trava fixa no motor (`scanPerTerm = 40`, imposta em
   `aplicarPerfilEdicao`); a **exportação** agora aparece com o botão

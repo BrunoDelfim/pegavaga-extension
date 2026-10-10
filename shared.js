@@ -100,6 +100,8 @@ globalThis.PegaVagaShared = (() => {
     limites: {
       maxTermos: MAX_TERMS,
       cotasEditaveis: ['term', 'hour', 'day24', 'day'],
+      perTermFixo: 0,
+      perHourFixo: 0,
       tetoDiarioFixo: 0,
       scanPerTermFixo: 0,
       per24h: DEFAULT_SETTINGS.apply.per24h,
@@ -391,6 +393,12 @@ globalThis.PegaVagaShared = (() => {
     // Cotas que a edição não expõe ficam impostas — e não voltam pela UI.
     if (limites.per24h != null) cfg.apply.per24h = limites.per24h;
     if (limites.tetoDiarioFixo > 0) cfg.apply.perDay = limites.tetoDiarioFixo;
+
+    // Cotas por termo e por hora: quando a edição não tem campo (> 0), o motor
+    // impõe o valor fixo por cima do que vier do formulário (no free o usuário
+    // não ajusta nada; no premium os dois são 0 e o usuário manda).
+    if (limites.perTermFixo > 0) cfg.apply.perTerm = limites.perTermFixo;
+    if (limites.perHourFixo > 0) cfg.apply.perHour = limites.perHourFixo;
 
     // Teto de vagas visitadas por termo: no free é trava fixa do motor (o campo
     // "Máx. vagas por termo" não existe na edição); no premium (0) o usuário manda.
