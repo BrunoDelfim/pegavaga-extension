@@ -138,21 +138,29 @@ licenças e contas de teste — por exemplo `premium@pegavaga.test`, senha
 
 ## Versionamento
 
-O `version` do `manifest.json` segue um **SemVer adaptado**, e a faixa diz em que
-ponto do caminho a extensão está:
+O `version` do `manifest.json` usa **quatro casas** —
+`MAIOR.MENOR.CORREÇÃO.REVISÃO` — e a faixa diz em que ponto do caminho a extensão
+está:
 
-| Faixa         | Significa                                                          |
-| ------------- | ------------------------------------------------------------------ |
-| `0.x`         | **em desenvolvimento** — ainda mudando, sem garantia de estabilidade |
-| `1.0`         | **pronto para usar** — primeira versão estável; só chega aqui quando for de verdade |
-| `1.1`, `1.2`… | melhorias e correções **compatíveis**                              |
-| `2.0`         | mudança **grande**, que quebra config/dados salvos                 |
+| Faixa                 | Significa                                                          |
+| --------------------- | ------------------------------------------------------------------ |
+| `0.x.x.x`             | **em desenvolvimento** — ainda mudando, sem garantia de estabilidade |
+| `1.0.0.0`             | **pronto para usar** — primeira versão estável; só chega aqui quando for de verdade |
+| `1.1.0.0`, `1.2.0.0`… | melhorias e correções **compatíveis**                              |
+| `2.0.0.0`             | mudança **grande**, que quebra config/dados salvos                 |
 
-Enquanto o `1.0` não sai, tudo é `0.x`. A versão aparece no cabeçalho do pop-up
-(junto da edição ativa) e o histórico fica no [`CHANGELOG.md`](CHANGELOG.md).
+As três primeiras casas são o **SemVer** de sempre — a terceira (correção) sobe em
+ajuste compatível. A **quarta é a revisão da build**: sobe quando a mesma versão é
+reempacotada com um retoque que **não muda comportamento** (um texto, um
+comentário, a limpeza de um trecho `TEMPORÁRIO`). Ou seja, `0.3.0.0` e `0.3.0.1`
+fazem o mesmo — só não são o mesmo pacote.
+
+Enquanto o `1.0.0.0` não sai, tudo é `0.x.x.x`. A versão aparece no cabeçalho do
+pop-up (junto da edição ativa) e o histórico fica no
+[`CHANGELOG.md`](CHANGELOG.md).
 
 > A **versão da extensão é independente da edição** (free/premium): é a mesma
-> build — a `0.1` pode estar rodando como free ou como premium.
+> build — a `0.3.0.0` pode estar rodando como free ou como premium.
 
 ## Instalação (modo desenvolvedor)
 

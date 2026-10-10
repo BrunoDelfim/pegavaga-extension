@@ -3,16 +3,17 @@
 Todas as mudanças relevantes desta extensão, da mais nova para a mais antiga. O
 formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/) e a
 numeração, o SemVer adaptado descrito no
-[README](README.md#versionamento): `0.x` enquanto desenvolve, `1.0` quando estiver
-pronto para usar, e depois `1.1`, `2.0`…
+[README](README.md#versionamento): `0.x.x.x` enquanto desenvolve, `1.0.0.0` quando
+estiver pronto para usar, e depois `1.1.0.0`, `2.0.0.0`… (a 4ª casa é só a revisão
+da build).
 
-> A numeração antiga ia até `1.4.2`, sem registro aqui. A **0.1** marca o reinício
-> sob esta convenção — a `1.0` fica reservada para o lançamento estável.
+> A numeração antiga ia até `1.4.2`, sem registro aqui. A **0.3.0.0** é a versão
+> atual sob esta convenção — a `1.0.0.0` fica reservada para o lançamento estável.
 >
 > Este changelog cobre **só a extensão**: a API de licenças (Python) vive num
 > repositório **privado** separado, com changelog próprio.
 
-## [0.1] — em desenvolvimento
+## [0.3.0.0] — em desenvolvimento
 
 ### Adicionado
 
@@ -108,6 +109,9 @@ pronto para usar, e depois `1.1`, `2.0`…
   reabilitado. O agendador, o "Ceder a vez" e os campos de ritmo humano já saem do
   free, com valores seguros fixos no código.
 - `manifest.json`: `version` de `1.4.2` para `0.1`, já sob a nova convenção.
+- `manifest.json`: `version` de `0.1` para **`0.3.0.0`** — a numeração passou a usar
+  **quatro casas** (`MAIOR.MENOR.CORREÇÃO.REVISÃO`, sendo a última a revisão da
+  build), e o `README.md` §Versionamento explica o formato.
 - `README.md`: abertura corrigida (não promete mais recursos que a edição free não
   tem) e novas seções **Edições** e **Versionamento**.
 

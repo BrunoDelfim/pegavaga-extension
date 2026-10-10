@@ -172,7 +172,7 @@ const chromeFalso = {
     },
   },
   runtime: {
-    getManifest: () => ({ version: '0.1' }),
+    getManifest: () => ({ version: '0.3.0.0' }),
     onMessage: { addListener() {} },
     lastError: null,
   },

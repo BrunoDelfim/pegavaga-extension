@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PegaVaga - Rastreamento de Vagas do LinkedIn",
-  "version": "0.1",
+  "version": "0.3.0.0",
   "description": "Automação de candidaturas e rastreamento de vagas no LinkedIn: busca por termo, cotas por hora/24h/dia, agendador de horários, ritmo humano com proteção da conta, formulário autônomo (responde perguntas e fecha popups pós-candidatura) e exportação para Excel (CSV) com o motivo das vagas não candidatadas.",
   "icons": {
     "16": "icons/pg-16.png",

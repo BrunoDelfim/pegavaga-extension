@@ -74,7 +74,7 @@ const enviados = []; // { tabId, mensagem } mandados para a aba
 
 const chromeFalso = {
   runtime: {
-    getManifest: () => ({ version: '0.1' }),
+    getManifest: () => ({ version: '0.3.0.0' }),
     getURL: (caminho) => 'chrome-extension://pegavaga/' + caminho,
     lastError: undefined,
     onInstalled: { addListener() {} },
