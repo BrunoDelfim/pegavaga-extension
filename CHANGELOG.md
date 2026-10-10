@@ -106,6 +106,12 @@ da build).
   script usa para saber se a página mexeu (`createSignal`, `waitUntil` e
   `waitForQuiet` do `shared.js`): a página que mexe, a que fica quieta, o prazo, o
   `check` que estoura e a inscrição que precisa ser desfeita ao sair.
+- **Notas de trabalho** (`docs/`): `candidatura-externa.md` — o esquema de **abrir,
+  preencher e devolver para você revisar** as vagas cujo botão sai do LinkedIn
+  (mapa de ATS, perguntas que não respondemos sozinhos, limite da permissão e as
+  fases de execução) — e `migracao-typescript.md` — o plano de trocar o JS por TS,
+  com o build **sem npm** já validado (o `tsc` sai do registry e roda com `node`).
+  São desenho, não código: nada disso está implementado.
 
 ### Alterado
 

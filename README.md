@@ -32,6 +32,9 @@ extensao/
 │   ├── smoke-espera.js         # o motor de espera: sinal, waitUntil e waitForQuiet
 │   ├── smoke-conta.js          # o pop-up num DOM falso: conta, plano e painel do admin
 │   └── smoke-ajuda.js          # (temporário) o pedido de ajuda ao usuário
+├── docs/           # Notas de trabalho (o desenho acordado antes do código)
+│   ├── candidatura-externa.md  # vaga no site da empresa: abrir, preencher e revisar
+│   └── migracao-typescript.md  # trocar o JS por TS (e o build sem npm)
 ├── CHANGELOG.md    # Histórico de versões (a regra está no README)
 └── README.md
 ```
@@ -40,6 +43,12 @@ Este repositório é **só a extensão**. A API de licenças (Python) vive num
 repositório **privado** separado: a extensão pergunta a ela (`/plano`) quando há
 conta, e o `manifest.json` já declara o host do backend de desenvolvimento
 (`http://127.0.0.1:8787`).
+
+As **notas de trabalho** (`docs/`) não descrevem o que existe: são o desenho do que
+vem — a **candidatura em site de terceiro** (a vaga cujo botão sai do LinkedIn) e a
+**migração de JavaScript para TypeScript** — no mesmo espírito do `docs/` da API.
+Servem para a implementação nascer cortada na fronteira certa, e não como
+documentação do que já roda.
 
 ### Testes
 
