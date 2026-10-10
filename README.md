@@ -29,6 +29,7 @@ extensao/
 ├── content.js      # Scraping do DOM do LinkedIn, candidatura, fila e storage
 ├── tests/          # Testes que rodam no Node (o shared.js é livre de DOM)
 │   ├── smoke-edicoes.js        # perfis free/premium e o funil do parseSettings
+│   ├── smoke-espera.js         # o motor de espera: sinal, waitUntil e waitForQuiet
 │   ├── smoke-conta.js          # o pop-up num DOM falso: conta, plano e painel do admin
 │   └── smoke-ajuda.js          # (temporário) o pedido de ajuda ao usuário
 ├── CHANGELOG.md    # Histórico de versões (a regra está no README)
@@ -48,11 +49,19 @@ premium mantém continuam coerentes.
 
 ```sh
 node tests/smoke-edicoes.js   # perfis, cotas e o funil do parseSettings
+node tests/smoke-espera.js    # o motor de espera: sinal, waitUntil e waitForQuiet
 node tests/smoke-conta.js     # o pop-up de verdade num DOM falso
 node tests/smoke-ajuda.js     # (temporário) o pedido de ajuda ao usuário
 ```
 
-O segundo é um **teste de interface sem navegador**: ele monta um DOM falso (um
+O segundo não toca em DOM nem em aba nenhuma: exercita o **motor de espera** que o
+content script usa para saber se a página mexeu — o sinal que acorda a espera a
+cada mutação, o `waitUntil` (valor achado na hora, pelo sinal e pelo prazo, com
+`check` que estoura) e o `waitForQuiet` (a página quieta, a que mexe durante a
+espera e a que já estava mexendo quando ela começou) — e confere que ninguém fica
+inscrito depois que a espera termina.
+
+O terceiro é um **teste de interface sem navegador**: ele monta um DOM falso (um
 elemento para cada `id` do `popup.html`, com os `hidden` do HTML), um
 `chrome.storage.local` em memória e um **servidor de mentira no `fetch`** — e roda
 `edicoes.js`, `shared.js` e `popup.js` como o Chrome faria. Depois abre o pop-up,
@@ -61,10 +70,11 @@ chamada de rede nenhuma**, que o painel do administrador **só** aparece quando 
 servidor concede, que um `401` devolve a tela ao free e que ficar sem rede **não**
 derruba quem tem assinatura.
 
-O terceiro cobre o **(temporário) pedido de ajuda**: roda o `background.js` de
-verdade com um `chrome` falso (storage, alarms, tabs e notifications) e confere
-que o pedido vira uma notificação com os dois botões e que o clique leva a decisão
-para a aba de origem.
+O quarto cobre o **(temporário) pedido de ajuda**: roda o `background.js` de
+verdade com um `chrome` falso (storage, alarms, tabs, windows e notifications) e
+confere que o pedido vira uma notificação com os dois botões, que o clique leva a
+decisão para a aba de origem — trazendo a aba para a frente, com o foco na janela
+dela, quando é o "Vou preencher à mão" — e que o aviso sai da tela.
 
 ## Edições (free, portfólio e premium)
 
@@ -330,9 +340,10 @@ pop-up (junto da edição ativa) e o histórico fica no
   marca o campo como inválido) ou o **envio pode demorar a confirmar**. Nesses
   casos, em vez de desistir calado, o PegaVaga mostra um **aviso na área de
   trabalho** com a vaga e dois botões:
-  - **Vou preencher à mão** → a automação **para e respeita**: não clica, não fecha
-    nada e espera o formulário sair da tela (até 10 min) enquanto você responde e
-    envia. Depois a varredura continua;
+  - **Vou preencher à mão** → a aba da vaga **vem para a frente** (com o foco na
+    janela, caso ela esteja atrás de outra) e a automação **para e respeita**: não
+    clica, não fecha nada e espera o formulário sair da tela (até 10 min) enquanto
+    você responde e envia. Depois a varredura continua;
   - **Pular esta vaga** → o formulário é descartado e a vaga é **pulada de vez**
     (não gasta cota e não é visitada de novo); a varredura segue para a próxima.
 

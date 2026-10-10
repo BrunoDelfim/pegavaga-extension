@@ -10,9 +10,10 @@
  *
  *   1. o CONTRATO no shared.js (textos, botoes, id do aviso e os desfechos
  *      `manual`/`pulada`), que e o unico lugar que sabe o que o aviso diz;
- *   2. o background.js RODANDO com um `chrome` falso (storage, alarms, tabs e
- *      notifications): o pedido vira notificacao com os dois botoes, o clique
- *      leva a decisao para a aba de origem e o aviso sai da tela.
+ *   2. o background.js RODANDO com um `chrome` falso (storage, alarms, tabs,
+ *      windows e notifications): o pedido vira notificacao com os dois botoes, o
+ *      clique leva a decisao para a aba de origem — o "Vou preencher à mão" traz
+ *      essa aba para frente (com o foco na janela dela) — e o aviso sai da tela.
  *
  *   node tests/smoke-ajuda.js
  * ===========================================================================*/
@@ -62,15 +63,19 @@ if (!S) {
 /* chrome falso do service worker                                              */
 /* -------------------------------------------------------------------------- */
 //
-// So o que o background.js usa: storage, alarms, tabs, action e a API de
-// notificacoes (o aviso na area de trabalho). `avisos`/`limpos`/`enviados` sao o
-// que o teste confere depois.
+// So o que o background.js usa: storage, alarms, tabs, windows, action e a API de
+// notificacoes (o aviso na area de trabalho). `avisos`/`limpos`/`enviados`/
+// `ativadas`/`janelas` sao o que o teste confere depois.
+
+const JANELA_DA_ABA = 7; // a janela onde vive a aba 42 (a da vaga)
 
 const armazem = new Map();
 const ouvintes = { mensagem: [], botao: [] };
 const avisos = []; // { id, opcoes } criados
 const limpos = []; // ids de aviso tirados da tela
 const enviados = []; // { tabId, mensagem } mandados para a aba
+const ativadas = []; // { tabId, opcoes } abas trazidas para frente
+const janelasFocadas = []; // { janelaId, opcoes } janelas que ganharam foco
 
 const chromeFalso = {
   runtime: {
@@ -114,10 +119,20 @@ const chromeFalso = {
     query: async () => [],
     reload: async () => {},
     create() {},
-    update() {},
+    update(tabId, opcoes) {
+      ativadas.push({ tabId, opcoes });
+      // O `focarAba` pergunta a janela da aba para focar: o update devolve a aba.
+      return Promise.resolve({ id: tabId, windowId: JANELA_DA_ABA });
+    },
     sendMessage(tabId, mensagem, callback) {
       enviados.push({ tabId, mensagem });
       if (callback) callback(undefined);
+    },
+  },
+  windows: {
+    update(janelaId, opcoes) {
+      janelasFocadas.push({ janelaId, opcoes });
+      return Promise.resolve({ id: janelaId, focused: true });
     },
   },
   action: {
@@ -334,6 +349,11 @@ async function principal() {
     JSON.stringify(enviados[0].mensagem)
   );
   ok('e o aviso sai da tela', limpos.includes('pegavaga-ajuda:42:p1'), JSON.stringify(limpos));
+  ok(
+    'pular nao mexe no foco: a varredura segue onde voce esta',
+    ativadas.length === 0 && janelasFocadas.length === 0,
+    JSON.stringify({ ativadas, janelasFocadas })
+  );
 
   clicarNoAviso(0); // "Vou preencher à mão"
   await respirar(10);
@@ -342,6 +362,18 @@ async function principal() {
     'clicar em preencher à mão devolve manual',
     enviados.length === 2 && enviados[1].mensagem.acao === 'manual',
     JSON.stringify(enviados[1] && enviados[1].mensagem)
+  );
+  ok(
+    'e traz a aba da vaga para frente',
+    ativadas.length === 1 && ativadas[0].tabId === 42 && ativadas[0].opcoes.active === true,
+    JSON.stringify(ativadas)
+  );
+  ok(
+    'com o foco na janela dela (nao so na aba)',
+    janelasFocadas.length === 1 &&
+      janelasFocadas[0].janelaId === JANELA_DA_ABA &&
+      janelasFocadas[0].opcoes.focused === true,
+    JSON.stringify(janelasFocadas)
   );
 
   const antesDosCliquesEstranhos = enviados.length;
@@ -354,6 +386,11 @@ async function principal() {
     'clique sem destino nao responde nada',
     enviados.length === antesDosCliquesEstranhos,
     JSON.stringify(enviados.slice(antesDosCliquesEstranhos))
+  );
+  ok(
+    'e nao mexe no foco de ninguem',
+    ativadas.length === 1 && janelasFocadas.length === 1,
+    JSON.stringify({ ativadas, janelasFocadas })
   );
   ok('e o aviso alheio sai da tela mesmo assim', limpos.includes('outro:42:p1'));
 

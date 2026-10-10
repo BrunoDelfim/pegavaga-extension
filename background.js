@@ -113,7 +113,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // responder — ou o envio demora a confirmar —, o content script pede ajuda e
 // espera. Mostramos um aviso na área de trabalho com dois botões:
 //
-//   * "Vou preencher à mão" → a automação para e espera você terminar;
+//   * "Vou preencher à mão" → a aba da vaga vem para a frente (com o foco na
+//     janela dela) e a automação para e espera você terminar;
 //   * "Pular esta vaga"     → a vaga é descartada e a varredura segue adiante.
 //
 // O id do aviso carrega o `tabId` (ver `SHARED.ajudaId`): o clique pode acordar o
@@ -175,6 +176,35 @@ function limparAviso(avisoId) {
 }
 
 /**
+ * Traz a aba da vaga para frente e dá o foco à janela dela. É o que o "Vou
+ * preencher à mão" precisa: você acabou de dizer que vai digitar no formulário,
+ * então ele tem que estar na sua frente — não atrás de outra aba (ou da janela
+ * do LinkedIn minimizada).
+ *
+ * Nunca rejeita: sem foco, a decisão continua valendo (o content script espera
+ * do mesmo jeito).
+ */
+async function focarAba(tabId) {
+  if (tabId == null || !chrome.tabs || typeof chrome.tabs.update !== 'function') return false;
+
+  try {
+    // `active: true` traz a aba para frente dentro da janela dela.
+    const aba = await chrome.tabs.update(tabId, { active: true });
+    const janelaId = aba && aba.windowId != null ? aba.windowId : null;
+
+    // A janela pode estar atrás de outra (o caso comum: você clicou no aviso com
+    // o terminal na frente): é o `windows.update` que põe ela na frente.
+    if (janelaId != null && chrome.windows && typeof chrome.windows.update === 'function') {
+      await chrome.windows.update(janelaId, { focused: true });
+    }
+
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * O usuário clicou num botão do aviso: leva a decisão de volta para a aba que
  * está esperando e tira o aviso da tela. Fechar o aviso sem clicar não decide
  * nada — a espera do content script tem prazo e segue o caminho de sempre.
@@ -187,11 +217,19 @@ function responderAjuda(avisoId, indice) {
 
   if (!alvo || !acao) return Promise.resolve(false);
 
-  return sendToTab(alvo.tabId, {
-    type: MSG.AJUDA_RESPOSTA,
-    pedidoId: alvo.pedidoId,
-    acao: acao,
-  });
+  // "Vou preencher à mão": a aba vai para a frente (e a janela ganha o foco)
+  // ANTES de a decisão chegar ao content script — você vai digitar nela agora.
+  // "Pular esta vaga" não mexe em foco: a varredura segue na aba que já está na
+  // sua frente.
+  const foco = acao === 'manual' ? focarAba(alvo.tabId) : Promise.resolve(false);
+
+  return foco.then(() =>
+    sendToTab(alvo.tabId, {
+      type: MSG.AJUDA_RESPOSTA,
+      pedidoId: alvo.pedidoId,
+      acao: acao,
+    })
+  );
 }
 
 if (chrome.notifications && chrome.notifications.onButtonClicked) {

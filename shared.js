@@ -1685,18 +1685,19 @@ globalThis.PegaVagaShared = (() => {
 
     return new Promise((resolve) => {
       let settled = false;
+      let timer = null;
       let off = null;
 
       const finish = (quiet) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         if (off) off();
         resolve(quiet);
       };
 
       off = signal && signal.subscribe ? signal.subscribe(() => finish(false)) : null;
-      const timer = setTimeout(() => finish(true), silence);
+      timer = setTimeout(() => finish(true), silence);
     });
   }
 

@@ -95,6 +95,18 @@ da build).
 - `tests/smoke-edicoes.js`: teste de fumaça que roda no Node puro (o `shared.js` é
   livre de DOM) cobrindo as regras de free e premium.
 
+- **(temporário) O "Vou preencher à mão" traz a vaga para a frente**
+  (`background.js`): quando você escolhe responder o formulário por conta própria, a
+  aba do LinkedIn vai para a frente (`tabs.update` com `active: true`) e a **janela
+  dela ganha o foco** (`windows.update` com `focused: true`) — o clique vem da área
+  de trabalho, não de dentro do navegador, então a aba pode estar atrás de outra (ou
+  a janela atrás da do terminal). "Pular esta vaga" não mexe em foco nenhum, e sem
+  as APIs (ou se o navegador recusar) a decisão continua valendo.
+- `tests/smoke-espera.js`: teste de fumaça do **motor de espera** que o content
+  script usa para saber se a página mexeu (`createSignal`, `waitUntil` e
+  `waitForQuiet` do `shared.js`): a página que mexe, a que fica quieta, o prazo, o
+  `check` que estoura e a inscrição que precisa ser desfeita ao sair.
+
 ### Alterado
 
 - **Cotas do free fixadas e reduzidas**: os campos "Por termo" e "Por hora" saíram
@@ -152,3 +164,9 @@ da build).
   (permissão de área de trabalho negada no sistema, por exemplo), o content script
   avisa no **console do LinkedIn** — antes disso, a vaga era descartada sem deixar
   rastro do motivo.
+- **O `waitForQuiet` usava o `timer` antes de ele ser declarado** (`shared.js`): se o
+  sinal acordasse na **mesma volta** do `subscribe` — a página mexeu antes de a
+  espera começar —, o `clearTimeout(timer)` estourava `ReferenceError: Cannot access
+  'timer' before initialization` em vez de devolver `false`. O `timer` agora é
+  declarado antes (`let timer = null`) e só é cancelado se existir, como no
+  `waitUntil`. Coberto pelo `tests/smoke-espera.js`.
