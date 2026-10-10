@@ -31,6 +31,7 @@ extensao/
 │   ├── smoke-edicoes.js        # perfis free/premium e o funil do parseSettings
 │   ├── smoke-espera.js         # o motor de espera: sinal, waitUntil e waitForQuiet
 │   ├── smoke-conta.js          # o pop-up num DOM falso: conta, plano e painel do admin
+│   ├── smoke-popups.js         # o guard de popup: quando ele age e o que protege
 │   └── smoke-ajuda.js          # (temporário) o pedido de ajuda ao usuário
 ├── docs/           # Notas de trabalho (o desenho acordado antes do código)
 │   ├── candidatura-externa.md  # vaga no site da empresa: abrir, preencher e revisar
@@ -60,6 +61,7 @@ premium mantém continuam coerentes.
 node tests/smoke-edicoes.js   # perfis, cotas e o funil do parseSettings
 node tests/smoke-espera.js    # o motor de espera: sinal, waitUntil e waitForQuiet
 node tests/smoke-conta.js     # o pop-up de verdade num DOM falso
+node tests/smoke-popups.js    # o guard de popup: quando ele age e o que protege
 node tests/smoke-ajuda.js     # (temporário) o pedido de ajuda ao usuário
 ```
 
@@ -84,6 +86,13 @@ verdade com um `chrome` falso (storage, alarms, tabs, windows e notifications) e
 confere que o pedido vira uma notificação com os dois botões, que o clique leva a
 decisão para a aba de origem — trazendo a aba para a frente, com o foco na janela
 dela, quando é o "Vou preencher à mão" — e que o aviso sai da tela.
+
+O quinto cobre o **guard de popup** (o observer que fecha, na hora, os dialogs que
+o LinkedIn joga por cima): a regra é pura (`popupGuardMode`, no `shared.js`) e o
+teste a confere estado por estado — quieto fora da varredura, quieto antes de o
+formulário ser identificado, `proteger` com o formulário na tela e `limpar` quando
+ele já saiu dela (é o caso do envio: o LinkedIn troca o nó do dialog e o popup do
+pós-candidatura chega atrasado).
 
 ## Edições (free, portfólio e premium)
 

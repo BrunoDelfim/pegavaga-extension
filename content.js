@@ -20,7 +20,9 @@
  *      o script clicar duas vezes nem dar a etapa por perdida cedo.
  *   5. Fechar, assim que entram na tela, os popups do LinkedIn (pesquisa de
  *      avaliação, "salvar vaga", "seguir empresa"): o guard de popup age no
- *      meio de qualquer espera e o fluxo continua de onde estava.
+ *      meio de qualquer espera e o fluxo continua de onde estava — inclusive
+ *      depois do envio (o popup de avaliação costuma chegar atrasado) e depois
+ *      de a vaga passar para você, quando o formulário já saiu da tela.
  *   6. Varrer termo por termo: ao atingir a cota do termo, avança para o
  *      próximo da fila; quando acaba a cota, pausa e retoma mais tarde.
  *   7. Imitar o ritmo humano (intervalos variáveis, leitura da vaga, pausas
@@ -84,6 +86,16 @@
 
   const APPLY_PENDING = SHARED.APPLY_PENDING || 'adiada';
   const APPLY_OUTCOMES = SHARED.APPLY_OUTCOMES || {};
+
+  /* Modos do guard de popup (a regra pura vive no shared.js: é a mesma nos três
+   * contextos). O fallback existe só para o conteúdo não quebrar sem ele. */
+  const POPUP_GUARD = SHARED.POPUP_GUARD || {
+    quieto: 'quieto',
+    proteger: 'proteger',
+    limpar: 'limpar',
+  };
+
+  const popupGuardMode = SHARED.popupGuardMode || (() => POPUP_GUARD.quieto);
 
   const isWithinSchedule = SHARED.isWithinSchedule || (() => true);
   const nextScheduleStart = SHARED.nextScheduleStart || (() => null);
@@ -310,7 +322,11 @@
     guard: null, // bloqueio temporário detectado (proteção da conta)
     guardStopped: false, // a varredura parou por causa do bloqueio?
     keepDialog: null, // o formulário aberto: o único dialog que não pode ser fechado
-    dismissing: false, // fechando o pós-candidatura (aí todo dialog é popup)
+    /* Pós-envio: a candidatura acabou de sair (ou a vaga ficou com você) e a tela
+     * ainda não foi limpa para a próxima — aí todo dialog que aparecer é popup,
+     * inclusive o que o LinkedIn manda atrasado. Fica de pé até o `closeStaleForm`
+     * limpar a tela (o `applyToJob` também zera ao começar a próxima vaga). */
+    posEnvio: false,
     interruptBusy: false, // já estamos fechando um popup que entrou na tela
     interruptTimer: null, // checagem de popup agendada pelas mutações
     /* (TEMPORÁRIO) Pedido de ajuda em andamento: { id, acao, avisoId }. Enquanto
@@ -1183,14 +1199,20 @@
     };
   }
 
+  /** O que este dialog é, na classificação compartilhada (form/pesquisa/aviso). */
+  function dialogKind(dialog) {
+    if (!dialog) return SHARED.DIALOG_KINDS.unknown;
+
+    return SHARED.classifyDialog(dialogSignals(dialog));
+  }
+
   /**
    * Este dialog é o formulário da Candidatura Simplificada? O LinkedIn usa o
    * mesmo `role="dialog"` para o formulário e para os popups de pesquisa que
    * aparecem depois do envio — sem essa distinção, a automação confunde os dois.
    */
   function isApplyForm(dialog) {
-    if (!dialog) return false;
-    return SHARED.classifyDialog(dialogSignals(dialog)) === SHARED.DIALOG_KINDS.form;
+    return dialogKind(dialog) === SHARED.DIALOG_KINDS.form;
   }
 
   /**
@@ -1205,11 +1227,44 @@
     return null;
   }
 
+  /**
+   * Dialog que a extensão nunca fecha por conta própria: o aviso de limite de uso
+   * do LinkedIn. Fechá-lo esconderia justamente o recado que a proteção da conta
+   * precisa ler (ver `detectRateLimit`) — quem decide parar é o `tripGuard`.
+   */
+  function isRestrictionNotice(dialog) {
+    if (!dialog) return false;
+
+    try {
+      return RATE_LIMIT_RE.test(normalize(dialog.innerText || dialog.textContent || ''));
+    } catch (error) {
+      return false;
+    }
+  }
+
   /** Popup aberto que NÃO é o formulário (ex.: "avalie a candidatura"). */
   function findPopup(except) {
     for (const dialog of dialogs()) {
       if (except && dialog.contains(except)) continue;
-      if (!isApplyForm(dialog)) return dialog;
+      if (isApplyForm(dialog)) continue;
+      if (isRestrictionNotice(dialog)) continue;
+
+      return dialog;
+    }
+    return null;
+  }
+
+  /**
+   * Popup que a página **já disse** que é popup (pesquisa de avaliação ou aviso).
+   * Diferente do `findPopup`, ignora o que ainda não deu para classificar: sem o
+   * formulário na tela, um dialog sem cara pode ser a etapa seguinte carregando —
+   * e fechá-lo descartaria uma candidatura de verdade.
+   */
+  function findKnownPopup() {
+    for (const dialog of dialogs()) {
+      if (isApplyForm(dialog)) continue;
+      if (isRestrictionNotice(dialog)) continue;
+      if (dialogKind(dialog) !== SHARED.DIALOG_KINDS.unknown) return dialog;
     }
     return null;
   }
@@ -1221,18 +1276,39 @@
   /* ---- Popups que não são o formulário (fechar sem medo) ------------------ */
 
   /**
-   * O guarda de popup está de serviço? Só durante uma varredura e só quando já
-   * sabemos qual é o formulário (ou quando estamos fechando o pós-candidatura,
-   * que aí não há nada a proteger).
+   * Qual dialog o guard precisa proteger AGORA.
    *
-   * Antes do formulário estar identificado o guard fica quieto de propósito:
-   * um dialog que ainda está carregando não pode ser confundido com popup.
+   * O LinkedIn troca o nó do dialog no meio da candidatura — e ao enviar —, então
+   * o ponteiro que guardamos não pode ser a única referência: se ele já saiu da
+   * tela, quem vale é o formulário que está nela neste instante. Sem isso o guard
+   * ficava cego justamente depois do envio, e o popup que o LinkedIn manda
+   * atrasado (a pesquisa de avaliação) ficava na frente da lista sem ninguém para
+   * fechá-lo — a varredura não continuava.
+   *
+   * Devolve `null` quando não há formulário a proteger — inclusive antes de
+   * identificarmos o primeiro: aí o guard fica quieto de propósito, porque um
+   * dialog que ainda está carregando não pode ser confundido com popup.
    */
-  function popupGuardActive() {
-    if (state.scanning !== true) return false;
-    if (state.dismissing === true) return true;
+  function keepDialogNow() {
+    if (state.keepDialog === null) return null;
+    if (document.contains(state.keepDialog)) return state.keepDialog;
 
-    return Boolean(state.keepDialog) && document.contains(state.keepDialog);
+    return findModal();
+  }
+
+  /** O que o guard deve fazer agora (ver SHARED.popupGuardMode) e o que proteger. */
+  function guardState() {
+    const protegido = keepDialogNow();
+
+    return {
+      protegido: protegido,
+      modo: popupGuardMode({
+        varrendo: state.scanning === true,
+        formularioIdentificado: state.keepDialog !== null,
+        formularioNaTela: Boolean(protegido),
+        posEnvio: state.posEnvio === true,
+      }),
+    };
   }
 
   /**
@@ -1241,9 +1317,16 @@
    * frente e o trabalho continua de onde estava, sem esperar checagem por tempo.
    */
   async function handleInterrupt() {
-    if (state.interruptBusy || !popupGuardActive()) return false;
+    if (state.interruptBusy) return false;
 
-    const popup = findPopup(state.keepDialog);
+    const guard = guardState();
+    if (guard.modo === POPUP_GUARD.quieto) return false;
+
+    // Com o formulário na tela, qualquer outro dialog é popup. Sem ele (o
+    // LinkedIn trocou o nó, ou a candidatura acabou de sair), só mexemos no que a
+    // página já disse que é popup: o resto pode ser a etapa seguinte carregando.
+    const popup = guard.modo === POPUP_GUARD.proteger ? findPopup(guard.protegido) : findKnownPopup();
+
     if (!popup) return false;
 
     state.interruptBusy = true;
@@ -1259,7 +1342,11 @@
 
   /** As mutações vêm em rajada: agrupa antes de mexer na página. */
   function scheduleInterrupt() {
-    if (state.interruptTimer || !popupGuardActive()) return;
+    if (state.interruptTimer) return;
+
+    // Fora da varredura a página é sua e não há nada a fazer. O resto da decisão
+    // é do `handleInterrupt`, que resolve o formulário que está na tela agora.
+    if (state.scanning !== true) return;
 
     state.interruptTimer = setTimeout(() => {
       state.interruptTimer = null;
@@ -2064,52 +2151,57 @@
    * Fecha o que ficou aberto de uma vaga anterior: um formulário descartado que
    * não saiu da tela (o LinkedIn às vezes engasga no descarte) ou popups
    * sobrantes. Sem isso, a próxima vaga trabalharia no formulário errado.
+   *
+   * É aqui também que o pós-envio termina: com a tela limpa para a próxima vaga,
+   * o guard pode descansar. Quando a página é sua e nem chegamos a limpar (ver o
+   * `processCard`), o pós-envio continua de pé — é o guard, de olho nas mutações,
+   * que fecha o popup atrasado assim que ele entra na tela.
    */
   async function closeStaleForm(budgetMs) {
     const modal = findModal();
 
     if (modal) {
       await closeModal(modal, true); // o closeModal já limpa os popups no fim
+      state.posEnvio = false;
       return;
     }
 
     await clearPopups(null, Number(budgetMs) || CONFIG.popupWaitMs * 2);
+    state.posEnvio = false;
   }
 
   /**
    * Depois do envio: fecha a confirmação e mais qualquer popup que o LinkedIn
    * jogue na tela (pesquisa de avaliação, "salvar vaga", "seguir empresa"…).
    * Sem isso, o overlay fica na frente da lista e a varredura empaca.
+   *
+   * O pós-envio fica de pé **depois** daqui (ver `state.posEnvio`): o popup de
+   * avaliação costuma chegar segundos depois do envio, e quem o pega no instante
+   * em que ele entra na tela é o guard do MutationObserver.
    */
   async function dismissAfterApply(modal) {
-    // Enquanto isso, todo dialog que aparecer é popup (não há formulário a
-    // proteger): o guard fecha sozinho, no instante em que entrar na tela.
-    state.dismissing = true;
+    state.posEnvio = true;
 
-    try {
-      if (modal && document.contains(modal) && looksSubmitted(modal)) {
-        const done = popupCloseButton(modal);
+    if (modal && document.contains(modal) && looksSubmitted(modal)) {
+      const done = popupCloseButton(modal);
 
-        if (done) {
-          humanClick(done);
-          await waitUntil(
-            () => !document.contains(modal) || !isVisible(modal),
-            CONFIG.popupWaitMs,
-            CONFIG.popupPollMs
-          );
-        }
+      if (done) {
+        humanClick(done);
+        await waitUntil(
+          () => !document.contains(modal) || !isVisible(modal),
+          CONFIG.popupWaitMs,
+          CONFIG.popupPollMs
+        );
       }
-
-      await clearPopups(null, CONFIG.popupBudgetMs);
-
-      // O popup de avaliação/pesquisa às vezes só chega depois do envio (vem do
-      // servidor). Em vez de dormir um tempo fixo, esperamos o sinal da tela: se
-      // ele chegar em 300 ms, fechamos em 300 ms.
-      await waitUntil(() => findPopup(null), CONFIG.popupLateMs, CONFIG.popupPollMs);
-      await clearPopups(null, CONFIG.popupBudgetMs);
-    } finally {
-      state.dismissing = false;
     }
+
+    await clearPopups(null, CONFIG.popupBudgetMs);
+
+    // O popup de avaliação/pesquisa às vezes só chega depois do envio (vem do
+    // servidor). Em vez de dormir um tempo fixo, esperamos o sinal da tela: se
+    // ele chegar em 300 ms, fechamos em 300 ms.
+    await waitUntil(() => findPopup(null), CONFIG.popupLateMs, CONFIG.popupPollMs);
+    await clearPopups(null, CONFIG.popupBudgetMs);
   }
 
   /**
@@ -2132,18 +2224,21 @@
    * que o LinkedIn joga por cima e respondemos as perguntas obrigatórias.
    */
   async function applyToJob(jobId) {
-    // O guard de popup precisa saber qual dialog é o formulário — e sair de
-    // serviço no fim, mesmo se o fluxo estourar no meio.
+    // O guard de popup precisa saber qual dialog é o formulário. A vaga começa
+    // sem nenhum identificado: até o modal abrir o guard fica quieto, para não
+    // confundir um dialog que ainda está carregando com popup.
     clearInterruptTimer(); // nada de guard atrasado de uma vaga anterior
     state.keepDialog = null;
-    state.dismissing = false;
+    state.posEnvio = false;
 
     try {
       return await runApplyFlow(jobId);
     } finally {
+      // O ponteiro morre com a vaga (o formulário pode ter sido descartado ou
+      // trocado pelo LinkedIn), mas o guard **não sai de serviço**: se a
+      // candidatura saiu, o pós-envio continua de pé até a tela ser limpa para a
+      // próxima vaga, e é ele que fecha o popup atrasado que ainda vai aparecer.
       state.keepDialog = null;
-      state.dismissing = false;
-      clearInterruptTimer();
     }
   }
 
@@ -2851,7 +2946,9 @@
   async function processCard(card, id, settings) {
     // Formulário/popup de uma vaga anterior pode estar cobrindo a lista: sem
     // isso, o clique no card não abre a vaga. Só mexemos na página se ela
-    // estiver livre — a sua vez vem antes de tudo.
+    // estiver livre — a sua vez vem antes de tudo. Quando não está, o guard
+    // continua de serviço no pós-envio: o popup que o LinkedIn mandar depois é
+    // fechado no instante em que entra na tela (ver `state.posEnvio`).
     if (userIsIdle(settings)) await closeStaleForm();
 
     bumpVisited();
@@ -2928,6 +3025,7 @@
 
     state.scanning = true;
     state.abort = false;
+    state.posEnvio = false; // varredura nova: a tela ainda não tem nada nosso
     state.lastRun = new Date().toISOString();
     broadcastProgress();
 

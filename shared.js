@@ -1275,6 +1275,56 @@ globalThis.PegaVagaShared = (() => {
     return '';
   }
 
+  /**
+   * Modos do guard de popup (ver `popupGuardMode`). Quem lê é o content script:
+   *   `quieto`   — não mexe em nada;
+   *   `proteger` — há um formulário na tela: qualquer outro dialog é popup;
+   *   `limpar`   — sem formulário na tela: só o que a página já disse que é popup.
+   */
+  const POPUP_GUARD = {
+    quieto: 'quieto',
+    proteger: 'proteger',
+    limpar: 'limpar',
+  };
+
+  /**
+   * O guard de popup deve agir agora — e como?
+   *
+   * O guard é quem fecha, no instante em que entram na tela, os popups que o
+   * LinkedIn joga por cima da candidatura (pesquisa de avaliação, "salvar vaga",
+   * "seguir empresa"): sem ele a varredura empaca com um overlay na frente da
+   * lista. Recebe o que o content script sabe da página:
+   *
+   *   varrendo               — a varredura está trabalhando agora?
+   *   formularioIdentificado — já sabemos qual dialog é o formulário desta vaga?
+   *   formularioNaTela       — esse formulário está na tela neste instante?
+   *   posEnvio               — a candidatura acabou de sair (ou a vaga passou para
+   *                            você) e a tela ainda não foi limpa para a próxima?
+   *
+   * Regras, na ordem:
+   *   1. fora da varredura: `quieto` — a página é do usuário, não mexemos nela;
+   *   2. com o formulário na tela: `proteger` — ele é o único dialog que não pode
+   *      ser tocado; todo o resto é popup;
+   *   3. formulário já identificado (mesmo que o LinkedIn tenha trocado o nó dele
+   *      no meio do caminho) ou pós-envio: `limpar` — é justamente aí que chega o
+   *      popup atrasado do pós-candidatura, e é o guard que tem de pegá-lo;
+   *   4. antes de identificar o formulário: `quieto` — um dialog que ainda está
+   *      carregando não pode ser confundido com popup.
+   *
+   * O `limpar` é conservador de propósito: sem formulário na tela, fechar um
+   * dialog ainda sem cara (a próxima etapa carregando) descartaria uma candidatura
+   * de verdade — então lá só entra o que a página já classificou.
+   */
+  function popupGuardMode(sinais) {
+    const s = sinais || {};
+
+    if (s.varrendo !== true) return POPUP_GUARD.quieto;
+    if (s.formularioNaTela === true) return POPUP_GUARD.proteger;
+    if (s.posEnvio === true || s.formularioIdentificado === true) return POPUP_GUARD.limpar;
+
+    return POPUP_GUARD.quieto;
+  }
+
   /** Resposta específica configurada para a pergunta ('' se não houver). */
   function answerForQuestion(question, answers) {
     const hint = plainText(question);
@@ -1732,6 +1782,7 @@ globalThis.PegaVagaShared = (() => {
     APPLY_PENDING,
     APPLY_KINDS,
     DIALOG_KINDS,
+    POPUP_GUARD,
     AJUDA_MOTIVOS,
     AJUDA_BOTOES,
     AJUDA_ACOES,
@@ -1763,6 +1814,7 @@ globalThis.PegaVagaShared = (() => {
     plainText,
     classifyDialog,
     matchDismissLabel,
+    popupGuardMode,
     answerForQuestion,
     pickChoice,
     createSignal,

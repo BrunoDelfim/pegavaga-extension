@@ -106,6 +106,16 @@ da build).
   script usa para saber se a página mexeu (`createSignal`, `waitUntil` e
   `waitForQuiet` do `shared.js`): a página que mexe, a que fica quieta, o prazo, o
   `check` que estoura e a inscrição que precisa ser desfeita ao sair.
+- `POPUP_GUARD` e `popupGuardMode` (`shared.js`): a decisão do **guard de popup**
+  virou contrato puro, com três modos — `quieto` (nada a fazer), `proteger` (há um
+  formulário na tela: todo outro dialog é popup) e `limpar` (sem formulário na
+  tela: só o que a página já classificou como popup). O content script só informa o
+  que sabe da página (varredura em andamento, formulário identificado e na tela,
+  pós-envio).
+- `tests/smoke-popups.js`: teste de fumaça do **guard de popup**, estado por
+  estado — inclusive o caso que trouxe a correção (o formulário já saiu da tela,
+  porque o LinkedIn trocou o nó do dialog, e o popup do pós-candidatura chega
+  atrasado).
 - **Notas de trabalho** (`docs/`): `candidatura-externa.md` — o esquema de **abrir,
   preencher e devolver para você revisar** as vagas cujo botão sai do LinkedIn
   (mapa de ATS, perguntas que não respondemos sozinhos, limite da permissão e as
@@ -147,6 +157,30 @@ da build).
 - `tests/smoke-painel-teste.js`, substituído por `tests/smoke-conta.js`.
 
 ### Corrigido
+
+- **O guard de popup ficava cego depois do envio — e o popup do pós-candidatura
+  ficava na frente da lista** (`content.js`): o guard só agia enquanto
+  `document.contains(keepDialog)` fosse verdadeiro, e o LinkedIn **troca o nó** do
+  dialog — ao enviar, e também quando a vaga passa a ser sua (você preenche o campo
+  à mão, envia, e a confirmação/pesquisa de avaliação entra na tela). Com o
+  ponteiro apontando para um nó que não existe mais, o observer ficava defasado:
+  não fechava mais nada, a varredura seguia com o overlay na frente da lista — e o
+  `closeStaleForm` do card seguinte ainda era **pulado**, porque você tinha acabado
+  de mexer na página (`userIsIdle` falso). Agora o formulário protegido é resolvido
+  na hora (`keepDialogNow()`: o ponteiro guardado, se ainda está na tela, ou o
+  formulário que está nela agora) e o **pós-envio continua de serviço** depois do
+  `dismissAfterApply` (`state.posEnvio`, ex-`dismissing`) — até a tela ser limpa
+  para a próxima vaga (`closeStaleForm`) ou a próxima vaga começar —, então o popup
+  atrasado é fechado no instante em que entra na tela. Sem formulário na tela o
+  guard fecha só o que a página já classificou como popup (`findKnownPopup`):
+  fechar um dialog ainda sem cara (a etapa seguinte carregando) descartaria uma
+  candidatura de verdade.
+- **O guard nunca fecha o aviso de limite do LinkedIn** (`content.js`): o dialog
+  cujo texto casa com o sinal de restrição (`RATE_LIMIT_RE`) fica de fora do
+  `findPopup`/`findKnownPopup` — quem lê esse recado é a proteção da conta
+  (`detectRateLimit`/`tripGuard`), e fechá-lo esconderia justamente o aviso que faz
+  a varredura parar. Com o guard agindo em mais janelas (o pós-envio), isso deixou
+  de ser detalhe.
 
 - **(temporário) A vaga travada num campo recusado era descartada em silêncio, sem
   o aviso na área de trabalho** (`content.js`): o formulário era clicado em
