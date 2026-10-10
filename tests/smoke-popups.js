@@ -15,13 +15,22 @@
  * estado por estado, inclusive naqueles em que o formulario ja saiu da tela:
  *
  *   1. fora da varredura: quieto (a pagina e sua);
- *   2. antes do formulario ser identificado: quieto (dialog carregando nao e
- *      popup);
+ *   2. abrindo o formulario (o clique em "Candidatura Simplificada" acabou de
+ *      sair): quieto — o dialog que entra agora pode ser a nossa propria
+ *      candidatura carregando;
  *   3. com o formulario na tela: `proteger` (qualquer outro dialog e popup);
  *   4. formulario identificado mas ja fora da tela, ou pos-envio: `limpar` — e
  *      aqui que o popup atrasado do pos-candidatura e pego;
- *   5. e o modo `limpar` nunca vira licenca para fechar um formulario: quem decide
+ *   5. entre uma vaga e outra, com a pagina livre: `limpar` — um overlay parado
+ *      na frente da lista empaca a varredura inteira (era o "fica em Parar, sem
+ *      parar e sem seguir"), e nao ha candidatura nossa na tela para perder;
+ *   6. e o modo `limpar` nunca vira licenca para fechar um formulario: quem decide
  *      o que e popup de verdade e o `classifyDialog`, que continua no contrato.
+ *
+ * O outro lado do mesmo caso: o aviso de limite do LinkedIn nao e fechado por
+ * ninguem (fecha-lo esconderia o recado que a protecao precisa ler), entao a
+ * busca por ele (`looksRateLimited`) tem de reconhecer as redacoes que o
+ * LinkedIn usa — sem isso a varredura ficava presa com o aviso na tela.
  *
  *   node tests/smoke-popups.js
  * ===========================================================================*/
@@ -85,11 +94,46 @@ function principal() {
   ok('sem varredura, mesmo no pos-envio: quieto', modo({ posEnvio: true }) === G.quieto);
 
   console.log('');
-  console.log('== antes de identificar o formulario: o guard fica quieto ==');
+  console.log('== abrindo o formulario: o guard fica quieto ==');
 
   // O modal acabou de ser pedido no clique de "Candidatura Simplificada" e ainda
   // esta carregando: fecha-lo agora seria descartar a candidatura.
-  ok('varrendo, sem formulario identificado: quieto', modo({ varrendo: true }) === G.quieto);
+  ok(
+    'varrendo e abrindo o formulario: quieto',
+    modo({ varrendo: true, abrindoFormulario: true }) === G.quieto
+  );
+  ok(
+    'abrindo o formulario o guard fica quieto ate com a pagina livre',
+    modo({ varrendo: true, abrindoFormulario: true, usuarioOcioso: true }) === G.quieto
+  );
+  ok(
+    'abrindo o formulario, mas com o formulario ja na tela: proteger',
+    modo({ varrendo: true, abrindoFormulario: true, formularioNaTela: true }) === G.proteger
+  );
+
+  console.log('');
+  console.log('== entre uma vaga e outra, com a pagina livre: limpar ==');
+
+  // O caso que travava a varredura: um popup parado na frente da lista. Nada
+  // nosso esta na tela, entao nao ha candidatura a descartar — e o overlay tem
+  // de sair para a varredura seguir. O guard so toca na pagina quando ela esta
+  // livre (a sua vez vem antes).
+  ok(
+    'varrendo, sem formulario e com a pagina livre: limpar',
+    modo({ varrendo: true, usuarioOcioso: true }) === G.limpar
+  );
+  ok(
+    'varrendo, sem formulario e com voce mexendo na pagina: quieto',
+    modo({ varrendo: true }) === G.quieto
+  );
+  ok(
+    'varrendo, sem formulario e sem ociosidade informada: quieto',
+    modo({ varrendo: true, usuarioOcioso: false }) === G.quieto
+  );
+  ok(
+    'no pos-envio o popup e fechado mesmo com voce mexendo na pagina',
+    modo({ varrendo: true, posEnvio: true }) === G.limpar
+  );
 
   console.log('');
   console.log('== com o formulario na tela: proteger ==');
@@ -147,6 +191,53 @@ function principal() {
       hasClose: true,
     }) === S.DIALOG_KINDS.survey
   );
+
+  console.log('');
+  console.log('== o aviso de limite do LinkedIn: reconhecer para parar sozinho ==');
+
+  // O aviso de limite nao e fechado por ninguem (fecha-lo esconderia o recado que
+  // a protecao da conta precisa ler). Se a busca nao o reconhecesse, a varredura
+  // ficava presa com ele na frente da lista — nem parava, nem seguia.
+  ok('looksRateLimited esta no contrato', typeof S.looksRateLimited === 'function');
+  ok('e as redacoes vivem no shared', Array.isArray(S.RATE_LIMIT_PATTERNS) && S.RATE_LIMIT_PATTERNS.length > 0);
+
+  ok(
+    'limite de candidaturas (pt): reconhecido',
+    S.looksRateLimited(
+      'Você atingiu o limite de candidaturas simplificadas. Tente novamente mais tarde.'
+    ) === true
+  );
+  ok(
+    'numero maximo de candidaturas (pt): reconhecido',
+    S.looksRateLimited('Você atingiu o número máximo de candidaturas para esta conta.') === true
+  );
+  ok(
+    'application limit (en): reconhecido',
+    S.looksRateLimited("You've reached the limit of applications you can submit") === true
+  );
+  ok(
+    'checkpoint/verificacao (pt e en): reconhecido',
+    S.looksRateLimited('Verificação de segurança: prove que você é você') === true &&
+      S.looksRateLimited('Security verification') === true
+  );
+  ok(
+    'excesso de solicitacoes (pt e en): reconhecido',
+    S.looksRateLimited('Too many requests') === true &&
+      S.looksRateLimited('Muitas solicitações. Tente novamente mais tarde.') === true
+  );
+
+  // O outro lado: o que e candidatura de verdade nao pode ser confundido com aviso
+  // de limite — senao a varredura pararia sozinha no meio de uma vaga boa.
+  ok(
+    'o formulario da Candidatura Simplificada nao e aviso de limite',
+    S.looksRateLimited('Candidatura simplificada. Currículo. Enviar candidatura') === false
+  );
+  ok(
+    'a pesquisa de avaliacao nao e aviso de limite',
+    S.looksRateLimited('Sua candidatura foi enviada. Como foi sua experiência? Avalie') === false
+  );
+  ok('texto vazio nao e aviso de limite', S.looksRateLimited('') === false);
+  ok('sem texto nao e aviso de limite', S.looksRateLimited(null) === false);
 
   console.log('');
   console.log('== entrada estranha nao liga o guard ==');

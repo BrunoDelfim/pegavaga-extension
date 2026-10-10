@@ -21,8 +21,11 @@
  *   5. Fechar, assim que entram na tela, os popups do LinkedIn (pesquisa de
  *      avaliação, "salvar vaga", "seguir empresa"): o guard de popup age no
  *      meio de qualquer espera e o fluxo continua de onde estava — inclusive
- *      depois do envio (o popup de avaliação costuma chegar atrasado) e depois
- *      de a vaga passar para você, quando o formulário já saiu da tela.
+ *      depois do envio (o popup de avaliação costuma chegar atrasado), depois
+ *      de a vaga passar para você e entre uma vaga e outra, quando um overlay
+ *      parado na frente da lista empaca a varredura inteira. O aviso de limite
+ *      do LinkedIn é a exceção: ele nunca é fechado — o guard para a varredura e
+ *      impõe o descanso (ver `tripGuard`).
  *   6. Varrer termo por termo: ao atingir a cota do termo, avança para o
  *      próximo da fila; quando acaba a cota, pausa e retoma mais tarde.
  *   7. Imitar o ritmo humano (intervalos variáveis, leitura da vaga, pausas
@@ -327,6 +330,11 @@
      * inclusive o que o LinkedIn manda atrasado. Fica de pé até o `closeStaleForm`
      * limpar a tela (o `applyToJob` também zera ao começar a próxima vaga). */
     posEnvio: false,
+    /* O clique em "Candidatura Simplificada" acabou de sair e o formulário ainda
+     * pode estar carregando: nesse intervalo o guard fica quieto, porque o dialog
+     * que está entrando na tela pode ser a nossa própria candidatura (ver
+     * `popupGuardMode`). Vive só durante o `runApplyFlow`. */
+    abrirFormulario: false,
     interruptBusy: false, // já estamos fechando um popup que entrou na tela
     interruptTimer: null, // checagem de popup agendada pelas mutações
     /* (TEMPORÁRIO) Pedido de ajuda em andamento: { id, acao, avisoId }. Enquanto
@@ -789,27 +797,17 @@
 
   /**
    * Avisos que o LinkedIn mostra quando desconfia de automação ou de excesso de
-   * candidaturas. O texto é comparado sem acentos e em minúsculas.
+   * candidaturas. As redações vivem no shared.js (`looksRateLimited`), que é onde
+   * a regra pura cabe e onde dá para conferi-las nos testes — aqui fica só um
+   * fallback mínimo, para o content script não ficar sem proteção nenhuma se o
+   * shared.js não carregar.
    */
-  const RATE_LIMIT_RE = new RegExp(
-    [
-      'checkpoint',
-      'verificacao de seguranca',
-      'security verification',
-      'unusual activity',
-      'atividade suspeita',
-      'atividade incomum',
-      'muitas solicitacoes',
-      'too many requests',
-      'rate limit',
-      'limite de uso',
-      'temporarily restricted',
-      'restricao temporaria',
-      'tente novamente mais tarde',
-      'prove que voce',
-      'voce atingiu o limite',
-    ].join('|')
-  );
+  const looksRateLimited =
+    SHARED.looksRateLimited ||
+    ((texto) =>
+      /checkpoint|limite de uso|too many requests|atividade suspeita|application limit/.test(
+        normalize(texto)
+      ));
 
   /** Marca que o usuário acabou de interagir com a página. */
   function noteUserActivity() {
@@ -976,8 +974,13 @@
         return 'Redirecionado para verificação';
       }
 
-      const text = normalize(pageText());
-      if (RATE_LIMIT_RE.test(text)) return 'Aviso de limite de uso na página do LinkedIn';
+      if (looksRateLimited(pageText())) return 'Aviso de limite de uso na página do LinkedIn';
+
+      // O aviso de limite também vem como popup (é o dialog que a extensão não
+      // fecha de propósito): sem olhar para ele, a varredura ficava presa com o
+      // aviso na frente da lista — o texto da página pode não alcançá-lo (ele é
+      // longo e o aviso entra no fim) e o guard não o fecharia de qualquer forma.
+      if (restrictionNotice()) return 'Aviso de limite de uso no popup do LinkedIn';
     } catch (error) {
       return null;
     }
@@ -1228,18 +1231,32 @@
   }
 
   /**
-   * Dialog que a extensão nunca fecha por conta própria: o aviso de limite de uso
-   * do LinkedIn. Fechá-lo esconderia justamente o recado que a proteção da conta
-   * precisa ler (ver `detectRateLimit`) — quem decide parar é o `tripGuard`.
+   * Dialog que fala do limite de uso do LinkedIn. A extensão **não** o fecha: fechá-lo
+   * esconderia justamente o recado que a proteção da conta precisa ler — quem decide
+   * parar (e por quanto tempo) é o `tripGuard`.
    */
   function isRestrictionNotice(dialog) {
     if (!dialog) return false;
 
     try {
-      return RATE_LIMIT_RE.test(normalize(dialog.innerText || dialog.textContent || ''));
+      return looksRateLimited(dialog.innerText || dialog.textContent || '');
     } catch (error) {
       return false;
     }
+  }
+
+  /**
+   * Aviso de limite aberto agora, como popup (o formulário fica de fora: o recado
+   * de limite não entra nele — o que aparece ali dentro é erro de campo, que quem
+   * decide é o fluxo da candidatura). É o que faz a varredura parar sozinha em vez
+   * de ficar presa com o aviso na frente da lista.
+   */
+  function restrictionNotice() {
+    for (const dialog of dialogs()) {
+      if (isApplyForm(dialog)) continue;
+      if (isRestrictionNotice(dialog)) return dialog;
+    }
+    return null;
   }
 
   /** Popup aberto que NÃO é o formulário (ex.: "avalie a candidatura"). */
@@ -1285,9 +1302,9 @@
    * atrasado (a pesquisa de avaliação) ficava na frente da lista sem ninguém para
    * fechá-lo — a varredura não continuava.
    *
-   * Devolve `null` quando não há formulário a proteger — inclusive antes de
-   * identificarmos o primeiro: aí o guard fica quieto de propósito, porque um
-   * dialog que ainda está carregando não pode ser confundido com popup.
+   * Devolve `null` quando não há formulário a proteger: o que fazer aí é decisão do
+   * `popupGuardMode` (sem formulário na tela, o guard só mexe no que a página já
+   * classificou como popup — e só quando a página está livre).
    */
   function keepDialogNow() {
     if (state.keepDialog === null) return null;
@@ -1304,9 +1321,11 @@
       protegido: protegido,
       modo: popupGuardMode({
         varrendo: state.scanning === true,
+        abrindoFormulario: state.abrirFormulario === true,
         formularioIdentificado: state.keepDialog !== null,
         formularioNaTela: Boolean(protegido),
         posEnvio: state.posEnvio === true,
+        usuarioOcioso: userIsIdle(state.settings),
       }),
     };
   }
@@ -1315,9 +1334,28 @@
    * Um popup entrou na tela? Fecha. É chamado pelo MutationObserver enquanto o
    * script trabalha: o fluxo em andamento nem precisa saber — o overlay sai da
    * frente e o trabalho continua de onde estava, sem esperar checagem por tempo.
+   *
+   * O aviso de limite do LinkedIn é a exceção: ele **não** é fechado (é o recado
+   * que a proteção precisa ler) — o guard chama o `tripGuard` e a varredura para
+   * sozinha, em vez de ficar presa com o aviso na frente da lista, sem parar nem
+   * seguir.
    */
   async function handleInterrupt() {
     if (state.interruptBusy) return false;
+    if (state.scanning !== true) return false;
+
+    // Aviso de limite na tela: não fechamos (é o recado que a proteção precisa
+    // ler) e não seguimos como se nada tivesse acontecido. Parar é decisão do
+    // `tripGuard` — e é ele que impõe o descanso e pausa a fila. Sem isso a
+    // varredura ficava presa com o aviso na frente da lista, e era justo onde ela
+    // não podia continuar: o guard não fecha o aviso e o fluxo não tem o que
+    // clicar. (`guardStopped` evita reescrever o descanso a cada mutação do aviso.)
+    const aviso = restrictionNotice();
+
+    if (aviso && state.guardStopped !== true) {
+      await tripGuard('Aviso de limite de uso no popup do LinkedIn');
+      return false;
+    }
 
     const guard = guardState();
     if (guard.modo === POPUP_GUARD.quieto) return false;
@@ -2230,6 +2268,7 @@
     clearInterruptTimer(); // nada de guard atrasado de uma vaga anterior
     state.keepDialog = null;
     state.posEnvio = false;
+    state.abrirFormulario = false;
 
     try {
       return await runApplyFlow(jobId);
@@ -2238,7 +2277,9 @@
       // trocado pelo LinkedIn), mas o guard **não sai de serviço**: se a
       // candidatura saiu, o pós-envio continua de pé até a tela ser limpa para a
       // próxima vaga, e é ele que fecha o popup atrasado que ainda vai aparecer.
+      // Fora do formulário (entre uma etapa e outra) quem manda é o `posEnvio`.
       state.keepDialog = null;
+      state.abrirFormulario = false;
     }
   }
 
@@ -2262,15 +2303,26 @@
     }
 
     await humanPause(CONFIG.applyPreClickMs); // respira antes de abrir o formulário
-    humanClick(button);
 
-    let modal = await waitForModal(CONFIG.applyModalTimeoutMs);
+    // Daqui até o formulário estar na tela, o guard fica quieto: o dialog que
+    // entrar agora pode ser a nossa própria candidatura carregando, e fechá-la
+    // seria perdê-la. (Depois disso quem manda é o `keepDialog`/`posEnvio`.)
+    state.abrirFormulario = true;
 
-    // Internet lenta: o formulário pode demorar, ou um popup rouba a vez. Nesse
-    // caso limpamos a tela e damos mais uma rodada de espera.
-    if (!modal) {
-      await clearPopups(null, CONFIG.popupWaitMs * 2);
+    let modal = null;
+
+    try {
+      humanClick(button);
       modal = await waitForModal(CONFIG.applyModalTimeoutMs);
+
+      // Internet lenta: o formulário pode demorar, ou um popup rouba a vez. Nesse
+      // caso limpamos a tela e damos mais uma rodada de espera.
+      if (!modal) {
+        await clearPopups(null, CONFIG.popupWaitMs * 2);
+        modal = await waitForModal(CONFIG.applyModalTimeoutMs);
+      }
+    } finally {
+      state.abrirFormulario = false;
     }
 
     if (!modal) return { status: 'sem_modal' };
@@ -2292,15 +2344,18 @@
     let tentativas = 0; // cliques em "Avançar" que não mudaram de etapa
 
     while (Date.now() < deadline && steps < CONFIG.applyMaxSteps) {
-      if (state.abort) {
-        await closeModal(modal, true);
-        return { status: 'cancelada', steps };
-      }
-
+      // Antes do abort: se a varredura parou foi porque o LinkedIn sinalizou algo
+      // (o guard que viu o aviso de limite chama o `tripGuard`), e o desfecho
+      // honesto é `bloqueio` — não um "você pediu para parar" que não houve.
       const blocked = detectRateLimit();
       if (blocked) {
         await closeModal(modal, true);
         return { status: 'bloqueio', error: blocked, steps };
+      }
+
+      if (state.abort) {
+        await closeModal(modal, true);
+        return { status: 'cancelada', steps };
       }
 
       // A candidatura já está enviada? (o modal fechou ou mostra a confirmação)
@@ -3026,6 +3081,7 @@
     state.scanning = true;
     state.abort = false;
     state.posEnvio = false; // varredura nova: a tela ainda não tem nada nosso
+    state.abrirFormulario = false; // e nenhum clique em "Candidatura Simplificada" pendente
     state.lastRun = new Date().toISOString();
     broadcastProgress();
 

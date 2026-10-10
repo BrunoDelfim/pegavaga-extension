@@ -1275,6 +1275,53 @@ globalThis.PegaVagaShared = (() => {
     return '';
   }
 
+  /* ------------------------------------------------------------------------ */
+  /* Avisos de limite/abuso: o que faz a extensão parar                        */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Redações com que o LinkedIn avisa que desconfiou de automação ou que a conta
+   * passou do limite de candidaturas (pt e en), já sem acento e em minúsculas.
+   *
+   * Elas são procuradas em dois lugares — no texto da página e no texto dos
+   * dialogs —, porque a extensão **não** fecha esse aviso: fechá-lo esconderia
+   * justamente o recado que a proteção precisa ler. Se a busca não o achasse, a
+   * varredura ficava presa com o aviso na frente da lista, sem parar nem seguir.
+   */
+  const RATE_LIMIT_PATTERNS = [
+    'checkpoint',
+    'verificacao de seguranca',
+    'security verification',
+    'unusual activity',
+    'atividade suspeita',
+    'atividade incomum',
+    'muitas solicitacoes',
+    'too many requests',
+    'rate limit',
+    'limite de uso',
+    'atingiu o limite',
+    'limite de candidaturas',
+    'numero maximo de candidaturas',
+    'reached the limit',
+    'application limit',
+    'maximum number of applications',
+    'temporarily restricted',
+    'restricao temporaria',
+    'tente novamente mais tarde',
+    'prove que voce',
+  ];
+
+  /**
+   * Alguma dessas redações aparece neste texto? (a decisão de parar — e por
+   * quanto tempo — não é daqui: quem manda é o `tripGuard` do content script)
+   */
+  function looksRateLimited(value) {
+    const text = plainText(value);
+    if (!text) return false;
+
+    return RATE_LIMIT_PATTERNS.some((pattern) => text.includes(pattern));
+  }
+
   /**
    * Modos do guard de popup (ver `popupGuardMode`). Quem lê é o content script:
    *   `quieto`   — não mexe em nada;
@@ -1296,31 +1343,44 @@ globalThis.PegaVagaShared = (() => {
    * lista. Recebe o que o content script sabe da página:
    *
    *   varrendo               — a varredura está trabalhando agora?
+   *   abrindoFormulario      — acabamos de clicar em "Candidatura Simplificada" e o
+   *                            formulário ainda pode estar carregando?
    *   formularioIdentificado — já sabemos qual dialog é o formulário desta vaga?
    *   formularioNaTela       — esse formulário está na tela neste instante?
    *   posEnvio               — a candidatura acabou de sair (ou a vaga passou para
    *                            você) e a tela ainda não foi limpa para a próxima?
+   *   usuarioOcioso          — a página está livre (você não mexe nela há alguns
+   *                            segundos)?
    *
    * Regras, na ordem:
    *   1. fora da varredura: `quieto` — a página é do usuário, não mexemos nela;
    *   2. com o formulário na tela: `proteger` — ele é o único dialog que não pode
    *      ser tocado; todo o resto é popup;
-   *   3. formulário já identificado (mesmo que o LinkedIn tenha trocado o nó dele
+   *   3. abrindo o formulário (o clique saiu e ele ainda não está na tela):
+   *      `quieto` — o dialog que está entrando pode ser a nossa própria
+   *      candidatura carregando;
+   *   4. formulário já identificado (mesmo que o LinkedIn tenha trocado o nó dele
    *      no meio do caminho) ou pós-envio: `limpar` — é justamente aí que chega o
    *      popup atrasado do pós-candidatura, e é o guard que tem de pegá-lo;
-   *   4. antes de identificar o formulário: `quieto` — um dialog que ainda está
-   *      carregando não pode ser confundido com popup.
+   *   5. entre uma vaga e outra, com a página livre: `limpar` — um popup parado na
+   *      frente da lista empaca a varredura inteira (o clique no card não abre a
+   *      vaga, o detalhe não carrega e a vaga é dada por perdida), e não há
+   *      candidatura nossa na tela para descartar;
+   *   6. fora disso: `quieto`.
    *
    * O `limpar` é conservador de propósito: sem formulário na tela, fechar um
    * dialog ainda sem cara (a próxima etapa carregando) descartaria uma candidatura
-   * de verdade — então lá só entra o que a página já classificou.
+   * de verdade — então lá só entra o que a página já classificou. E ele não briga
+   * com você: fora do formulário, a página só é tocada quando está livre.
    */
   function popupGuardMode(sinais) {
     const s = sinais || {};
 
     if (s.varrendo !== true) return POPUP_GUARD.quieto;
     if (s.formularioNaTela === true) return POPUP_GUARD.proteger;
+    if (s.abrindoFormulario === true) return POPUP_GUARD.quieto;
     if (s.posEnvio === true || s.formularioIdentificado === true) return POPUP_GUARD.limpar;
+    if (s.usuarioOcioso === true) return POPUP_GUARD.limpar;
 
     return POPUP_GUARD.quieto;
   }
@@ -1782,6 +1842,8 @@ globalThis.PegaVagaShared = (() => {
     APPLY_PENDING,
     APPLY_KINDS,
     DIALOG_KINDS,
+    RATE_LIMIT_PATTERNS,
+    looksRateLimited,
     POPUP_GUARD,
     AJUDA_MOTIVOS,
     AJUDA_BOTOES,

@@ -175,12 +175,35 @@ da build).
   guard fecha só o que a página já classificou como popup (`findKnownPopup`):
   fechar um dialog ainda sem cara (a etapa seguinte carregando) descartaria uma
   candidatura de verdade.
-- **O guard nunca fecha o aviso de limite do LinkedIn** (`content.js`): o dialog
-  cujo texto casa com o sinal de restrição (`RATE_LIMIT_RE`) fica de fora do
-  `findPopup`/`findKnownPopup` — quem lê esse recado é a proteção da conta
-  (`detectRateLimit`/`tripGuard`), e fechá-lo esconderia justamente o aviso que faz
-  a varredura parar. Com o guard agindo em mais janelas (o pós-envio), isso deixou
-  de ser detalhe.
+- **O guard nunca fecha o aviso de limite do LinkedIn — e agora é ele que para a
+  varredura** (`content.js`/`shared.js`): o dialog cujo texto casa com o sinal de
+  restrição fica de fora do `findPopup`/`findKnownPopup` — quem lê esse recado é a
+  proteção da conta (`detectRateLimit`/`tripGuard`), e fechá-lo esconderia justamente
+  o aviso que faz a varredura parar. Só que "não fechar" não bastava: o aviso entra
+  como popup **no fim do `<body>`** (o texto da página é lido só nos primeiros
+  20 000 caracteres, e a lista de vagas ocupa bem mais que isso) e as redações que o
+  LinkedIn usa para ele são muitas — o resultado era o pior dos dois mundos: o guard
+  não fechava o aviso, o detector não o reconhecia e a varredura ficava **presa em
+  "Parar"**, sem parar nem seguir. Agora (1) as redações vivem no `shared.js`
+  (`RATE_LIMIT_PATTERNS`/`looksRateLimited`, com as formas de limite de candidaturas
+  em pt e en) e são procuradas **no texto dos dialogs também**, (2) o guard que vê o
+  aviso chama o `tripGuard` — a varredura para sozinha, com o motivo no aviso do
+  pop-up, e a fila volta depois do descanso — e (3) o laço do formulário relê o
+  sinal **antes** do `abort`, para o desfecho ser `bloqueio` (parada por proteção do
+  LinkedIn) e não um "você pediu para parar" que não houve.
+- **Um popup parado na frente da lista empacava a varredura inteira — o guard só
+  agia depois do formulário identificado** (`content.js`/`shared.js`): entre uma vaga
+  e outra (`state.keepDialog` já zerado, sem pós-envio) o guard ficava **quieto** de
+  propósito, para não confundir um dialog que ainda está carregando com popup. Mas a
+  página inteira passa por esse estado: o clique no card não abria a vaga (o overlay
+  engolia o clique), o painel de detalhes não carregava, a vaga era dada por perdida
+  e o quadro se repetia com o botão em **"Parar"** — a varredura parecia travada. O
+  `popupGuardMode` ganhou dois sinais: `usuarioOcioso` (entre uma vaga e outra o
+  guard fecha só o que a página já classificou como popup — `limpar` — e **só**
+  quando a página está livre, então ele não briga com o seu clique) e
+  `abrindoFormulario` (do clique em "Candidatura Simplificada" até o formulário
+  entrar na tela o guard volta a ficar quieto, porque o dialog que entra nesse
+  intervalo pode ser a nossa própria candidatura carregando).
 
 - **(temporário) A vaga travada num campo recusado era descartada em silêncio, sem
   o aviso na área de trabalho** (`content.js`): o formulário era clicado em

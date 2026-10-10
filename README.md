@@ -89,10 +89,15 @@ dela, quando é o "Vou preencher à mão" — e que o aviso sai da tela.
 
 O quinto cobre o **guard de popup** (o observer que fecha, na hora, os dialogs que
 o LinkedIn joga por cima): a regra é pura (`popupGuardMode`, no `shared.js`) e o
-teste a confere estado por estado — quieto fora da varredura, quieto antes de o
-formulário ser identificado, `proteger` com o formulário na tela e `limpar` quando
-ele já saiu dela (é o caso do envio: o LinkedIn troca o nó do dialog e o popup do
-pós-candidatura chega atrasado).
+teste a confere estado por estado — quieto fora da varredura, `proteger` com o
+formulário na tela, quieto enquanto o formulário está sendo aberto (o dialog que
+entra aí pode ser a nossa própria candidatura carregando) e `limpar` quando ele já
+saiu dela ou entre uma vaga e outra com a página livre (com o formulário na tela é
+o caso do envio: o LinkedIn troca o nó do dialog e o popup do pós-candidatura
+chega atrasado). O teste também confere as redações do **aviso de limite** do
+LinkedIn (`looksRateLimited`): é o único dialog que o guard não fecha, então é o
+que faz a varredura **parar sozinha** — sem reconhecê-las, ela ficava presa com o
+aviso na frente da lista.
 
 ## Edições (free, portfólio e premium)
 
