@@ -1,0 +1,34 @@
+# ============================================
+# PegaVaga — extensão — .gitignore
+# Repositório PÚBLICO: nada de segredo aqui.
+# ============================================
+
+# --- Sistema operacional ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editores / IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.aider*
+.clinerules
+
+# --- Dependencias (se um dia entrar tooling no Node) ---
+node_modules/
+
+# --- Pacotes gerados (ZIP da Web Store / .crx local) ---
+*.zip
+*.crx
+*.pem
+
+# --- Relatorios exportados pela extensao ---
+pegavaga_*.csv
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

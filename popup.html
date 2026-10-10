@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PegaVaga</title>
+    <style>
+      :root {
+        --bg: #0a66c2;
+        --bg-dark: #004182;
+        --ok: #1f9d55;
+        --warn: #b7791f;
+        --error: #c53030;
+        --text: #1f2933;
+        --muted: #64748b;
+        --line: #e2e8f0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 340px;
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial,
+          sans-serif;
+        font-size: 13px;
+        color: var(--text);
+        background: #f8fafc;
+      }
+
+      header {
+        background: var(--bg);
+        color: #fff;
+        padding: 12px 14px;
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      header p {
+        margin: 2px 0 0;
+        font-size: 11px;
+        opacity: 0.85;
+      }
+
+      /* Selo da build: diz qual versão e qual edição estão rodando agora. */
+      .build {
+        display: inline-block;
+        margin-top: 2px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.18);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        white-space: nowrap;
+      }
+
+      /* Luzinha do status: mesma cor do ponto desenhado no ícone da extensão. */
+      .light {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        vertical-align: middle;
+        background: var(--muted);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+      }
+
+      .light.capturing {
+        background: #1f9d55;
+      }
+
+      .light.ready {
+        background: #f0a500;
+      }
+
+      .light.attention {
+        background: #d93025;
+      }
+
+      main {
+        padding: 12px 14px 14px;
+      }
+
+      .counter {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+      }
+
+      .counter .value {
+        font-size: 26px;
+        font-weight: 700;
+        color: var(--bg-dark);
+        line-height: 1;
+      }
+
+      .counter .label {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+
+      .counter .lastrun {
+        display: block;
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      button {
+        display: block;
+        width: 100%;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        border: none;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      #btn-start {
+        background: var(--bg);
+        color: #fff;
+      }
+      #btn-start:hover:not(:disabled) {
+        background: var(--bg-dark);
+      }
+
+      #btn-stop {
+        background: #e2e8f0;
+        color: #334155;
+      }
+      #btn-stop:hover:not(:disabled) {
+        background: #cbd5e1;
+      }
+
+      #btn-export {
+        background: var(--ok);
+        color: #fff;
+      }
+      #btn-export:hover:not(:disabled) {
+        background: #167a41;
+      }
+
+      #btn-clear {
+        background: transparent;
+        color: var(--muted);
+        font-weight: 500;
+        font-size: 11px;
+        padding: 6px;
+        margin-bottom: 0;
+      }
+      #btn-clear:hover:not(:disabled) {
+        color: var(--error);
+      }
+
+      .status {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+        background: #eef2f7;
+        color: var(--muted);
+        min-height: 18px;
+      }
+
+      .status.ok {
+        background: #e6ffed;
+        color: var(--ok);
+      }
+      .status.warn {
+        background: #fffaf0;
+        color: var(--warn);
+      }
+      .status.error {
+        background: #fff5f5;
+        color: var(--error);
+      }
+
+      details.settings {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-bottom: 10px;
+      }
+
+      details.settings > summary {
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 12px;
+        color: var(--bg-dark);
+        list-style: none;
+      }
+
+      details.settings > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.settings > summary::before {
+        content: "▸ ";
+      }
+      details.settings[open] > summary::before {
+        content: "▾ ";
+      }
+
+      details.settings label {
+        display: block;
+        margin: 8px 0 3px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      details.settings input,
+      details.settings textarea,
+      details.settings select {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--text);
+        background: #fff;
+      }
+
+      details.settings input:focus,
+      details.settings textarea:focus {
+        outline: none;
+        border-color: var(--bg);
+      }
+
+      details.settings textarea {
+        resize: vertical;
+        min-height: 56px;
+      }
+
+      .hint {
+        margin: 6px 0 0;
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .hint.ok {
+        color: var(--ok);
+      }
+      .hint.error {
+        color: var(--error);
+      }
+
+      /* Vale para os elementos que o JS esconde via .hidden: sem isso o
+         display: block/flex do CSS venceria o atributo. */
+      [hidden] {
+        display: none !important;
+      }
+
+      .terms-preview {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 6px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .terms-preview:empty {
+        display: none;
+      }
+
+      .terms-preview li {
+        padding: 2px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #eef2f7;
+        font-size: 10px;
+        color: var(--text);
+      }
+
+      .terms-preview li b {
+        font-weight: 600;
+        color: var(--bg-dark);
+      }
+
+      .counter .runinfo {
+        display: block;
+        margin-top: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--bg-dark);
+      }
+
+      .counter .quota {
+        display: block;
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .counter .summary {
+        display: block;
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--warn);
+      }
+
+      #guard-info {
+        margin: 0 0 12px;
+      }
+
+      .group {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px dashed var(--line);
+      }
+
+      .group > strong {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--bg-dark);
+      }
+
+      details.settings .sub {
+        display: block;
+        margin: 8px 0 3px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      details.settings label.inline {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        margin: 8px 0 0;
+        font-size: 11px;
+        color: var(--text);
+      }
+
+      details.settings label.inline input[type="checkbox"] {
+        width: auto;
+        flex: 0 0 auto;
+        margin: 1px 0 0;
+        padding: 0;
+      }
+
+      .grid2,
+      .grid3 {
+        display: grid;
+        gap: 6px;
+      }
+
+      .grid2 {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .grid3 {
+        grid-template-columns: 1fr 1fr 1fr;
+      }
+
+      .days {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 4px;
+      }
+
+      .days label {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        margin: 0;
+        padding: 3px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        font-size: 10px;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .days input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>
+        PegaVaga
+        <span class="light" id="status-light" role="status" title=""></span>
+      </h1>
+      <p>
+        Rastreamento de vagas do LinkedIn
+        <span class="build" id="build-info"></span>
+      </p>
+    </header>
+
+    <main>
+      <div class="counter">
+        <div>
+          <span class="value" id="count">0</span>
+          <span class="label">&nbsp;vagas capturadas</span>
+          <span class="lastrun" id="last-run">Nenhuma varredura realizada</span>
+          <span class="runinfo" id="run-info" hidden></span>
+          <span class="summary" id="apply-summary"></span>
+          <span class="quota" id="quota-info"></span>
+        </div>
+      </div>
+
+      <div class="status warn" id="guard-info" hidden></div>
+
+      <details class="settings" id="settings">
+        <summary>⚙ Configurações</summary>
+
+        <label for="base-url">URL de busca ou perfil</label>
+        <input
+          id="base-url"
+          type="text"
+          spellcheck="false"
+          placeholder="https://www.linkedin.com/jobs/search/"
+        />
+
+        <label for="location">Localização (opcional)</label>
+        <input id="location" type="text" placeholder="Ex.: Brasil, São Paulo, Remoto" />
+
+        <label for="terms">Termos de vaga (vários, separados por vírgula ou um por linha)</label>
+        <textarea
+          id="terms"
+          rows="4"
+          spellcheck="false"
+          placeholder="desenvolvedor frontend, react, node.js"
+        ></textarea>
+        <ol class="terms-preview" id="terms-preview"></ol>
+        <p class="hint" id="terms-queue"></p>
+        <p class="hint" id="terms-limit-hint" hidden></p>
+
+        <div class="group">
+          <strong>Candidaturas</strong>
+
+          <label class="inline">
+            <input type="checkbox" id="apply-enabled" />
+            <span>Candidatar-se sozinho pela Candidatura Simplificada</span>
+          </label>
+
+          <div class="grid3">
+            <div>
+              <label for="apply-per-term">Por termo</label>
+              <input id="apply-per-term" type="number" min="1" max="500" step="1" />
+            </div>
+            <div>
+              <label for="apply-hour">Por hora</label>
+              <input id="apply-hour" type="number" min="1" max="1000" step="1" />
+            </div>
+            <div id="field-apply-24h">
+              <label for="apply-24h">Por 24 h</label>
+              <input id="apply-24h" type="number" min="1" max="2000" step="1" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div id="field-apply-day">
+              <label for="apply-day">Por dia (0 = sem limite)</label>
+              <input id="apply-day" type="number" min="0" max="5000" step="1" />
+            </div>
+            <div id="field-apply-scan">
+              <label for="apply-scan">Máx. vagas por termo</label>
+              <input id="apply-scan" type="number" min="1" max="500" step="1" />
+            </div>
+          </div>
+
+          <p class="hint">
+            Cotas dinâmicas: ao estourar uma delas o PegaVaga pausa e volta sozinho
+            quando a próxima vaga liberar.
+          </p>
+
+          <span class="sub">Formulário (perguntas e popups do LinkedIn)</span>
+
+          <label class="inline">
+            <input type="checkbox" id="apply-fill-required" />
+            <span>
+              Responder sozinho perguntas obrigatórias (Sim/Não, listas e números)
+            </span>
+          </label>
+
+          <div class="grid2">
+            <div>
+              <label for="apply-answer-yes">Em Sim/Não, responder</label>
+              <select id="apply-answer-yes">
+                <option value="yes">Sim</option>
+                <option value="no">Não</option>
+              </select>
+            </div>
+            <div>
+              <label for="apply-answer-number">Número (anos, quantidade)</label>
+              <input id="apply-answer-number" type="number" min="0" max="200" step="1" />
+            </div>
+          </div>
+
+          <label for="apply-answer-text">Texto livre (ex.: cidade)</label>
+          <input
+            id="apply-answer-text"
+            type="text"
+            placeholder="Vazio = não inventa resposta"
+          />
+
+          <p class="hint">
+            O que o LinkedIn não respondeu vira estas respostas; deixar o texto livre
+            vazio evita respostas inventadas. Popups de avaliação ou pesquisa que
+            aparecem depois de candidatar são fechados sozinhos.
+          </p>
+        </div>
+
+        <div class="group" id="group-furtividade">
+          <strong>Furtividade e segurança</strong>
+
+          <label class="inline">
+            <input type="checkbox" id="apply-respect-user" />
+            <span>
+              Ceder a vez para mim: enquanto eu mexo na página, a automação espera em
+              vez de clicar ou rolar por cima
+            </span>
+          </label>
+
+          <label class="inline">
+            <input type="checkbox" id="apply-breaks" />
+            <span>Fazer pausas longas de tempos em tempos (ritmo de gente)</span>
+          </label>
+
+          <div class="grid2">
+            <div>
+              <label for="apply-delay-min">Intervalo mínimo (s)</label>
+              <input id="apply-delay-min" type="number" min="1" max="600" step="1" />
+            </div>
+            <div>
+              <label for="apply-delay-max">Intervalo máximo (s)</label>
+              <input id="apply-delay-max" type="number" min="1" max="600" step="1" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div>
+              <label for="apply-break-every">Vagas entre pausas</label>
+              <input id="apply-break-every" type="number" min="1" max="100" step="1" />
+            </div>
+            <div>
+              <label for="apply-break-seconds">Duração da pausa (s)</label>
+              <input id="apply-break-seconds" type="number" min="10" max="600" step="5" />
+            </div>
+          </div>
+
+          <p class="hint">
+            Os intervalos variam sozinhos (±30%), há pausas de "leitura" da vaga e, se
+            o LinkedIn pedir verificação ou avisar de limite de uso, o PegaVaga para
+            tudo por 1 h para proteger a sua conta.
+          </p>
+        </div>
+
+        <div class="group" id="group-agendador">
+          <strong>Agendador</strong>
+
+          <label class="inline">
+            <input type="checkbox" id="schedule-enabled" />
+            <span>Iniciar e parar sozinho nos horários abaixo</span>
+          </label>
+
+          <div class="grid2">
+            <div>
+              <label for="schedule-start">Começa às</label>
+              <input id="schedule-start" type="time" />
+            </div>
+            <div>
+              <label for="schedule-stop">Para às</label>
+              <input id="schedule-stop" type="time" />
+            </div>
+          </div>
+
+          <span class="sub">Dias da semana</span>
+          <div class="days" id="schedule-days"></div>
+
+          <label class="inline">
+            <input type="checkbox" id="schedule-autostart" />
+            <span>Começar sozinho quando o horário abrir</span>
+          </label>
+
+          <label class="inline">
+            <input type="checkbox" id="schedule-focus" />
+            <span>
+              Trazer a aba para frente (o Chrome pausa os timers de abas em segundo
+              plano)
+            </span>
+          </label>
+
+          <p class="hint" id="schedule-hint">Agendador desativado.</p>
+        </div>
+
+        <p class="hint" id="settings-hint">Salvo automaticamente.</p>
+      </details>
+
+      <button id="btn-start" type="button">▶ Iniciar Busca e Varredura</button>
+      <button id="btn-stop" type="button" disabled>■ Parar Varredura</button>
+      <button id="btn-export" type="button">⬇ Exportar para Excel (CSV)</button>
+      <button id="btn-export-failures" type="button">
+        ⚠ Exportar não candidatadas (CSV)
+      </button>
+      <button id="btn-clear" type="button">🗑 Limpar vagas capturadas</button>
+
+      <div class="status" id="status">
+        Clique em iniciar: o PegaVaga abre a busca do LinkedIn com os seus termos,
+        varre cada um e, se a candidatura automática estiver ligada, candidata-se
+        respeitando as cotas e o ritmo humano. O relatório das vagas que não deu
+        para candidatar traz o motivo de cada uma.
+      </div>
+    </main>
+
+    <script src="edicoes.js"></script>
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
