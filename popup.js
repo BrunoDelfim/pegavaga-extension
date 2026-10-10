@@ -22,6 +22,8 @@ const STORAGE_SETTINGS_KEY = SHARED.STORAGE.settings;
 const STORAGE_RUN_KEY = SHARED.STORAGE.run;
 const STORAGE_APPS_KEY = SHARED.STORAGE.apps;
 const STORAGE_GUARD_KEY = SHARED.STORAGE.guard;
+const STORAGE_PERFIL_KEY = SHARED.STORAGE.perfil;
+const STORAGE_SESSAO_KEY = SHARED.STORAGE.sessao;
 
 const CSV_HEADERS = [
   'ID',
@@ -73,6 +75,7 @@ let runCache = null;
 let breakCache = null;
 let guardCache = null; // proteção da conta em vigor (ou null)
 let scanCache = false; // o content script está varrendo agora?
+let contaModo = 'entrar'; // tela de conta aberta: 'entrar' ou 'criar'
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -80,9 +83,17 @@ async function init() {
   cacheElements();
   buildDayInputs();
   bindEvents();
-  aplicarPerfilNaUI();
 
+  // O perfil concedido pelo servidor (cache local) precisa estar aplicado antes do
+  // primeiro parseSettings: senão a interface montaria com o perfil do free.
+  await SHARED.aplicarPerfilSalvo();
+  aplicarPerfilNaUI();
   await loadSettingsToForm();
+
+  // Só quem tem conta fala com a API: o free anônimo continua 100% local. O
+  // `sincronizarPerfil` já redesenha a tela (perfil, conta e painel do admin).
+  await sincronizarPerfil();
+
   await refresh();
   await loadGuard();
   await syncScanningState();
@@ -147,6 +158,55 @@ function cacheElements() {
   els.quotaFixedHint = document.getElementById('quota-fixed-hint');
   els.termsLimitHint = document.getElementById('terms-limit-hint');
   els.buildInfo = document.getElementById('build-info');
+
+  // Conta (o caminho do Premium) e o painel do administrador — que só existe na
+  // tela quando o servidor concede (`features.painelAdmin` na resposta do /plano).
+  els.conta = document.getElementById('conta');
+  els.contaTitulo = document.getElementById('conta-titulo');
+  els.contaEstado = document.getElementById('conta-estado');
+  els.contaForm = document.getElementById('conta-form');
+  els.contaLogado = document.getElementById('conta-logado');
+  els.contaEmail = document.getElementById('conta-email');
+  els.contaSenha = document.getElementById('conta-senha');
+  els.contaSenha2 = document.getElementById('conta-senha2');
+  els.contaConfirma = document.getElementById('conta-confirma');
+  els.contaQuem = document.getElementById('conta-quem');
+  els.contaAviso = document.getElementById('conta-aviso');
+  els.contaDica = document.getElementById('conta-dica');
+  els.contaAbaEntrar = document.getElementById('conta-aba-entrar');
+  els.contaAbaCriar = document.getElementById('conta-aba-criar');
+  els.btnEntrar = document.getElementById('btn-entrar');
+  els.btnCadastrar = document.getElementById('btn-cadastrar');
+  els.btnSair = document.getElementById('btn-sair');
+  els.btnContaFechar = document.getElementById('btn-conta-fechar');
+
+  // Avatar do topo e o menu de opções que ele abre.
+  els.btnConta = document.getElementById('btn-conta');
+  els.avatarLetras = document.getElementById('avatar-letras');
+  els.avatarIco = document.getElementById('avatar-ico');
+  els.contaAvatar = document.getElementById('conta-avatar');
+  els.contaMenu = document.getElementById('conta-menu');
+  els.menuAvatar = document.getElementById('menu-avatar');
+  els.menuNome = document.getElementById('menu-nome');
+  els.menuPlano = document.getElementById('menu-plano');
+  els.btnMenuEntrar = document.getElementById('btn-menu-entrar');
+  els.btnMenuCriar = document.getElementById('btn-menu-criar');
+  els.btnMenuConta = document.getElementById('btn-menu-conta');
+  els.btnMenuAdmin = document.getElementById('btn-menu-admin');
+  els.btnMenuSair = document.getElementById('btn-menu-sair');
+
+  els.adminPanel = document.getElementById('admin-panel');
+  els.admChave = document.getElementById('adm-chave');
+  els.admEmail = document.getElementById('adm-email');
+  els.admDias = document.getElementById('adm-dias');
+  els.admEstado = document.getElementById('adm-estado');
+  els.admLista = document.getElementById('adm-lista');
+  els.admApi = document.getElementById('adm-api');
+  els.admStatus = document.getElementById('adm-status');
+  els.btnEmitir = document.getElementById('btn-emitir');
+  els.btnRecarregar = document.getElementById('btn-recarregar');
+  els.btnSimularFree = document.getElementById('btn-simular-free');
+  els.btnSimularPremium = document.getElementById('btn-simular-premium');
 }
 
 /** Versão declarada no manifest — é a mesma que o Chrome mostra em chrome://extensions. */
@@ -218,6 +278,9 @@ function aplicarPerfilNaUI() {
     const versao = versaoExtensao();
     els.buildInfo.textContent =
       (versao ? 'v' + versao + ' · ' : '') + 'edição ' + perfil.rotulo;
+    // Quando o perfil não é o de produção (free), o selo fica marcado — assim
+    // ninguém confunde uma tela com assinatura ativa com a build do usuário final.
+    els.buildInfo.className = perfil.chave === 'free' ? 'build' : 'build premium';
   }
 
   if (els.termsLimitHint) {
@@ -230,6 +293,503 @@ function aplicarPerfilNaUI() {
       perfil.limites.maxTermos +
       ' termos de vaga.';
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Conta — o único caminho para o Premium (e o único que fala com a API)      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pergunta o plano ao servidor quando existe sessão, e redesenha a tela com a
+ * resposta. Sem sessão não há chamada de rede: o free é local por definição.
+ * Quando o servidor recusa a credencial (401/403), o próprio shared já volta ao
+ * free — aqui só resta contar isso ao usuário.
+ */
+async function sincronizarPerfil() {
+  const resultado = await SHARED.sincronizarPlano();
+
+  // Redesenha SEMPRE: o servidor pode ter concedido, recusado (401 → free) ou
+  // simplesmente confirmado o que já valia. Não redesenhar é o que faria o painel
+  // do administrador continuar na tela depois de a sessão cair.
+  aplicarPerfilNaUI();
+  await loadSettingsToForm();
+  await renderConta();
+  await renderAdmin();
+  await refresh();
+
+  if (!resultado.ok && resultado.erro !== 'rede') {
+    setStatus(resultado.mensagem, 'warn');
+  }
+  return resultado;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Conta: avatar, menu de opções e as telas de entrar/criar conta              */
+/* -------------------------------------------------------------------------- */
+
+/** Liga/desliga a visibilidade sem briga com o CSS. */
+function mostrarElemento(el, mostrar) {
+  if (el) el.hidden = !mostrar;
+}
+
+/**
+ * Iniciais do e-mail — o "rosto" da conta (não há upload de foto; a API não
+ * guarda imagem). Duas partes antes do @ viram as duas letras (joana.silva → JS);
+ * com uma só, a segunda letra vem do domínio (cliente@exemplo.com → CE).
+ */
+function iniciaisDe(email) {
+  const texto = String(email || '').trim();
+  if (!texto) return '';
+
+  const partes = texto.split('@');
+  const usuario = partes[0] || '';
+  const dominio = partes[1] || '';
+  const nome = usuario.split(/[._\-+]+/).filter(Boolean);
+  const primeira = (nome[0] || usuario || '')[0] || '';
+  const segunda = nome.length > 1 ? nome[1][0] : dominio[0] || '';
+
+  return (primeira + segunda).toUpperCase().slice(0, 2);
+}
+
+/** Cor estável por conta: o mesmo e-mail sempre cai no mesmo tom. */
+const AVATAR_CORES = ['#0a66c2', '#1f9d55', '#7048e8', '#c2255c', '#0f766e', '#b45309'];
+
+function corDoEmail(email) {
+  const texto = String(email || '');
+  let soma = 0;
+  for (let i = 0; i < texto.length; i += 1) soma += texto.charCodeAt(i);
+  return AVATAR_CORES[soma % AVATAR_CORES.length];
+}
+
+/** Pinta o avatar do topo, do menu e da tela de conta com as iniciais da conta. */
+function pintarAvatares(email) {
+  const texto = email ? iniciaisDe(email) : '';
+  const cor = email ? corDoEmail(email) : '';
+
+  [els.btnConta, els.menuAvatar, els.contaAvatar].forEach((avatar) => {
+    if (!avatar) return;
+    avatar.style.background = cor;
+    avatar.style.color = cor ? '#fff' : '';
+  });
+
+  if (els.avatarLetras) els.avatarLetras.textContent = texto;
+  if (els.menuAvatar) els.menuAvatar.textContent = texto;
+  if (els.contaAvatar) els.contaAvatar.textContent = texto;
+
+  // Sem conta o avatar mostra o ícone de pessoa (e não as iniciais).
+  if (els.avatarIco) els.avatarIco.hidden = Boolean(texto);
+}
+
+/** O menu do avatar está aberto? */
+function menuAberto() {
+  return Boolean(els.contaMenu) && els.contaMenu.hidden === false;
+}
+
+function fecharMenu() {
+  if (els.contaMenu) els.contaMenu.hidden = true;
+  if (els.btnConta) els.btnConta.setAttribute('aria-expanded', 'false');
+}
+
+function alternarMenu() {
+  if (menuAberto()) return fecharMenu();
+
+  if (els.contaMenu) els.contaMenu.hidden = false;
+  if (els.btnConta) els.btnConta.setAttribute('aria-expanded', 'true');
+}
+
+/** Abre a tela de conta (o formulário de entrar ou o de criar). */
+function abrirConta(modo) {
+  fecharMenu();
+  definirModoConta(modo || 'entrar');
+  mostrarElemento(els.conta, true);
+  if (els.contaEmail) els.contaEmail.focus();
+}
+
+function fecharConta() {
+  mostrarElemento(els.conta, false);
+}
+
+/** Troca entre "Entrar" e "Criar conta" e leva o foco ao primeiro campo. */
+function trocarModo(modo) {
+  definirModoConta(modo);
+  if (els.contaEmail) els.contaEmail.focus();
+}
+
+/**
+ * Ajusta a tela de conta ao modo escolhido. O plano continua sendo do servidor:
+ * aqui só decidimos quais campos aparecem (criar conta pede a senha duas vezes).
+ */
+function definirModoConta(modo, opcoes) {
+  const config = opcoes || {};
+  contaModo = modo === 'criar' ? 'criar' : 'entrar';
+  const criando = contaModo === 'criar';
+
+  mostrarElemento(els.btnEntrar, !criando);
+  mostrarElemento(els.btnCadastrar, criando);
+  mostrarElemento(els.contaConfirma, criando);
+
+  if (els.contaAbaEntrar) els.contaAbaEntrar.setAttribute('aria-selected', String(!criando));
+  if (els.contaAbaCriar) els.contaAbaCriar.setAttribute('aria-selected', String(criando));
+
+  if (els.contaTitulo) {
+    els.contaTitulo.textContent = config.logado
+      ? 'Minha conta'
+      : criando
+        ? 'Criar conta'
+        : 'Entrar';
+  }
+
+  if (els.contaDica) {
+    els.contaDica.textContent = criando
+      ? 'A conta nasce como usuário: o Premium entra com a assinatura ativa.'
+      : 'Ainda não tem conta? Abra a aba “Criar conta”.';
+  }
+
+  if (!config.silencioso) setContaAviso('');
+}
+
+/** Clique no avatar: com sessão abre as opções; sem sessão vai direto ao entrar. */
+async function onContaClick() {
+  const sessao = await SHARED.lerSessao();
+  if (sessao) return alternarMenu();
+
+  // Sem sessão, o avatar abre a tela de entrar — e fecha se ela já estiver aberta.
+  if (els.conta && els.conta.hidden === false) return fecharConta();
+  abrirConta('entrar');
+}
+
+/** "Painel de administração" no menu: só existe com o papel vindo do servidor. */
+async function onMenuAdminClick() {
+  fecharMenu();
+  if (!SHARED.temFeature('painelAdmin')) return;
+
+  if (els.adminPanel) els.adminPanel.open = true;
+  await carregarLicencas();
+}
+
+/** Esc fecha o menu. */
+function onDocumentoTecla(evento) {
+  if (evento && evento.key === 'Escape') fecharMenu();
+}
+
+/** Clique fora do menu (e do avatar) fecha o menu. */
+function onDocumentoClick(evento) {
+  if (!menuAberto()) return;
+
+  const alvo = (evento && evento.target) || null;
+  const id = alvo && typeof alvo.id === 'string' ? alvo.id : '';
+
+  // Clicar no avatar (ou em qualquer parte dele) abre/fecha pelo próprio botão;
+  // clicar dentro do menu (inclusive no ícone de um item) é assunto do item. Nos
+  // dois casos o menu não pode fechar aqui — o clique borbulha até o body.
+  const doAvatar = id === 'btn-conta' || id === 'avatar-letras' || id === 'avatar-ico';
+  const doMenu = id === 'conta-menu' || id.indexOf('btn-menu-') === 0;
+
+  if (doAvatar || doMenu) return;
+  if (alvo && typeof alvo.closest === 'function' && alvo.closest('#conta-menu, #btn-conta')) {
+    return;
+  }
+
+  fecharMenu();
+}
+
+/** Desenha o bloco de conta a partir da sessão e do perfil que estão valendo. */
+async function renderConta() {
+  const sessao = await SHARED.lerSessao();
+  const perfil = SHARED.perfilEdicao();
+  const logado = Boolean(sessao);
+  const premium = SHARED.temFeature('export');
+  const admin = SHARED.temFeature('painelAdmin');
+  const email = (sessao && sessao.email) || '';
+
+  if (els.contaForm) els.contaForm.hidden = logado;
+  if (els.contaLogado) els.contaLogado.hidden = !logado;
+
+  if (els.contaEstado) {
+    els.contaEstado.textContent = logado
+      ? premium
+        ? 'Plano atual: ' + perfil.rotulo + ' — assinatura ativa (concedida pelo servidor).'
+        : 'Plano atual: ' + perfil.rotulo + ' — a assinatura não está ativa.'
+      : 'Você está no Free — tudo local, sem conta.';
+  }
+
+  if (els.contaQuem) {
+    const papel = sessao && sessao.papel === 'admin' ? ' (administrador)' : '';
+    els.contaQuem.textContent = logado
+      ? 'Conectado como ' + (sessao.email || 'conta') + papel + '.'
+      : '';
+  }
+
+  // Avatar do topo: iniciais de quem está conectado e o anel do plano concedido
+  // pelo SERVIDOR (verde com assinatura, dourado com o papel de administrador).
+  pintarAvatares(email);
+  if (els.btnConta) {
+    els.btnConta.className = 'avatar' + (admin ? ' admin' : premium ? ' pro' : '');
+    els.btnConta.title = logado ? email + ' · ' + perfil.rotulo : 'Entrar ou criar conta';
+  }
+
+  // Menu do avatar: as opções mudam com a sessão — nada aqui concede plano.
+  if (els.menuNome) els.menuNome.textContent = logado ? email : 'Você não está conectado';
+  if (els.menuPlano) {
+    els.menuPlano.textContent = logado
+      ? 'Plano ' + perfil.rotulo + (admin ? ' · administrador' : '')
+      : 'Free — tudo local, sem conta';
+  }
+
+  mostrarElemento(els.btnMenuEntrar, !logado);
+  mostrarElemento(els.btnMenuCriar, !logado);
+  mostrarElemento(els.btnMenuConta, logado);
+  mostrarElemento(els.btnMenuAdmin, admin);
+  mostrarElemento(els.btnMenuSair, logado);
+
+  definirModoConta(contaModo, { silencioso: true, logado: logado });
+
+  return { sessao, perfil };
+}
+
+/** Entrar e criar conta usam o MESMO caminho — só muda a rota. */
+function onEntrarClick() {
+  return conectar(false);
+}
+
+function onCadastrarClick() {
+  return conectar(true);
+}
+
+async function conectar(criar) {
+  const email = els.contaEmail ? els.contaEmail.value.trim() : '';
+  const senha = els.contaSenha ? els.contaSenha.value : '';
+
+  if (!email || !senha) {
+    setContaAviso('Informe e-mail e senha para continuar.');
+    return;
+  }
+
+  // Criar conta pede a senha duas vezes, e essa conferência é local: sem as duas
+  // senhas iguais nem chegamos a falar com o servidor.
+  if (criar && (els.contaSenha2 ? els.contaSenha2.value : '') !== senha) {
+    setContaAviso('As duas senhas precisam ser iguais.');
+    return;
+  }
+
+  setContaAviso(criar ? 'Criando a conta...' : 'Entrando...', true);
+
+  const resultado = criar
+    ? await SHARED.cadastrar(email, senha)
+    : await SHARED.entrar(email, senha);
+
+  if (!resultado.ok) {
+    setContaAviso(resultado.mensagem);
+    setStatus(resultado.mensagem, 'error');
+    return;
+  }
+
+  if (els.contaSenha) els.contaSenha.value = '';
+  if (els.contaSenha2) els.contaSenha2.value = '';
+  fecharMenu();
+
+  // Depois de entrar, a próxima abertura volta para "Entrar" (e não "Criar conta").
+  contaModo = 'entrar';
+
+  const premium = SHARED.temFeature('export');
+  setContaAviso('');
+  setStatus(
+    premium
+      ? (criar ? 'Conta criada — Premium ativo.' : 'Bem-vindo de volta — Premium ativo.')
+      : (criar
+          ? 'Conta criada. O PegaVaga continua no free até a assinatura ativar.'
+          : 'Bem-vindo de volta. O PegaVaga está no free — falta assinatura ativa.'),
+    'ok'
+  );
+
+  aplicarPerfilNaUI();
+  await loadSettingsToForm();
+  await renderConta();
+  await renderAdmin();
+  await refresh();
+}
+
+async function onSairClick() {
+  await SHARED.sair();
+  fecharMenu();
+
+  aplicarPerfilNaUI();
+  await loadSettingsToForm();
+  await renderConta();
+  await renderAdmin();
+  await refresh();
+
+  // Quem saiu volta para a tela de entrar — é ali que a próxima ação acontece.
+  abrirConta('entrar');
+  setContaAviso('Sessão encerrada neste navegador.');
+  setStatus('Você saiu da conta — o PegaVaga voltou ao Free.', 'ok');
+}
+
+function setContaAviso(mensagem, trabalhando) {
+  if (!els.contaAviso) return;
+  els.contaAviso.textContent = mensagem || '';
+  els.contaAviso.className = trabalhando ? 'hint ok' : 'hint';
+}
+
+/* -------------------------------------------------------------------------- */
+/* Painel do administrador                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Mostra o painel SÓ quando o perfil ativo traz `painelAdmin` — e essa feature só
+ * chega pelo `/plano` assinado pelo servidor. Não existe atalho, botão ou opção
+ * que o abra por conta própria: se o painel sumiu, a conta perdeu o papel.
+ */
+async function renderAdmin() {
+  const permitido = SHARED.temFeature('painelAdmin');
+
+  if (els.adminPanel) els.adminPanel.hidden = !permitido;
+  if (!permitido) return false;
+
+  if (els.admApi) els.admApi.value = await SHARED.lerApi();
+  await carregarLicencas();
+  return true;
+}
+
+async function carregarLicencas() {
+  const resultado = await SHARED.listarLicencas();
+
+  if (!resultado.ok) {
+    setAdmStatus(resultado.mensagem);
+    return;
+  }
+
+  renderLicencas(resultado.licencas);
+}
+
+function renderLicencas(licencas) {
+  if (!els.admLista) return;
+  els.admLista.textContent = '';
+
+  if (!licencas.length) {
+    const vazio = document.createElement('li');
+    vazio.textContent = 'Nenhuma licença cadastrada ainda.';
+    els.admLista.appendChild(vazio);
+    return;
+  }
+
+  licencas.forEach((licenca) => {
+    const item = document.createElement('li');
+    const validade = licenca.expiresAt ? 'até ' + licenca.expiresAt : 'sem validade';
+    const dono = licenca.email || 'sem e-mail';
+    const navegadores = (licenca.dispositivos || []).length;
+
+    item.appendChild(
+      document.createTextNode(
+        licenca.chave +
+          ' · ' +
+          licenca.plano +
+          '/' +
+          licenca.estado +
+          ' · ' +
+          validade +
+          ' · ' +
+          dono +
+          ' · ' +
+          navegadores +
+          ' navegador(es) '
+      )
+    );
+
+    const revogar = document.createElement('button');
+    revogar.type = 'button';
+    revogar.textContent = 'Revogar';
+    revogar.addEventListener('click', () => onRevogarClick(licenca.chave));
+    item.appendChild(revogar);
+
+    els.admLista.appendChild(item);
+  });
+}
+
+async function onEmitirClick() {
+  const chave = els.admChave ? els.admChave.value.trim() : '';
+  const email = els.admEmail ? els.admEmail.value.trim() : '';
+  const dias = els.admDias ? els.admDias.value : '';
+  const estado = els.admEstado ? els.admEstado.value : 'active';
+
+  if (!chave) {
+    setAdmStatus('Informe a chave da licença (ex.: PGV-CLIENTE-0001).');
+    return;
+  }
+
+  setAdmStatus('Emitindo...');
+
+  const resultado = await SHARED.emitirLicenca({
+    acao: 'emitir',
+    chave: chave,
+    email: email,
+    valeAteDias: dias,
+    estado: estado,
+  });
+
+  if (!resultado.ok) {
+    setAdmStatus(resultado.mensagem);
+    return;
+  }
+
+  const licenca = resultado.licenca || {};
+  setAdmStatus(
+    'Licença ' +
+      (licenca.chave || chave) +
+      ': ' +
+      (licenca.plano || '') +
+      '/' +
+      (licenca.estado || '') +
+      (licenca.expiresAt ? ' até ' + licenca.expiresAt : ' sem validade') +
+      '.'
+  );
+
+  if (els.admChave) els.admChave.value = '';
+  await carregarLicencas();
+}
+
+async function onRevogarClick(chave) {
+  setAdmStatus('Revogando ' + chave + '...');
+
+  const resultado = await SHARED.emitirLicenca({ acao: 'revogar', chave: chave });
+
+  if (!resultado.ok) {
+    setAdmStatus(resultado.mensagem);
+    return;
+  }
+
+  setAdmStatus('Licença ' + chave + ' revogada — quem usa cai no free na hora.');
+  await carregarLicencas();
+}
+
+/** "Ver a tela como": o perfil vem do servidor e não altera o direito real. */
+async function onSimularClick(chave) {
+  const resultado = await SHARED.simularPlano(chave);
+
+  if (!resultado.ok) {
+    setAdmStatus(resultado.mensagem);
+    return;
+  }
+
+  aplicarPerfilNaUI();
+  await loadSettingsToForm();
+  setAdmStatus(
+    'Mostrando a tela como ' +
+      SHARED.perfilEdicao().rotulo +
+      ' (simulação — o seu direito não mudou).'
+  );
+}
+
+async function onApiChange() {
+  await SHARED.salvarApi(els.admApi ? els.admApi.value : '');
+  setAdmStatus('Endereço salvo. Sincronizando o plano...');
+
+  await sincronizarPerfil();
+  await renderAdmin();
+}
+
+function setAdmStatus(mensagem) {
+  if (els.admStatus) els.admStatus.textContent = mensagem || '';
 }
 
 /** Monta as caixinhas dos dias da semana (0 = domingo). */
@@ -295,6 +855,46 @@ function bindEvents() {
 
   // Ao sair do campo, "limpa" a lista de termos (sem vazios e sem repetidos).
   els.terms.addEventListener('blur', () => saveSettingsFromForm({ normalizeForm: true }));
+
+  // Conta: o avatar abre as opções (logado) ou a tela de entrar (sem sessão).
+  if (els.btnConta) els.btnConta.addEventListener('click', onContaClick);
+  if (els.btnContaFechar) els.btnContaFechar.addEventListener('click', fecharConta);
+
+  if (els.btnMenuEntrar) els.btnMenuEntrar.addEventListener('click', () => abrirConta('entrar'));
+  if (els.btnMenuCriar) els.btnMenuCriar.addEventListener('click', () => abrirConta('criar'));
+  if (els.btnMenuConta) els.btnMenuConta.addEventListener('click', () => abrirConta('entrar'));
+  if (els.btnMenuAdmin) els.btnMenuAdmin.addEventListener('click', onMenuAdminClick);
+  if (els.btnMenuSair) els.btnMenuSair.addEventListener('click', onSairClick);
+
+  if (els.contaAbaEntrar) els.contaAbaEntrar.addEventListener('click', () => trocarModo('entrar'));
+  if (els.contaAbaCriar) els.contaAbaCriar.addEventListener('click', () => trocarModo('criar'));
+
+  // Entrar, criar conta e sair. Enter na senha confirma o modo que está aberto.
+  if (els.btnEntrar) els.btnEntrar.addEventListener('click', onEntrarClick);
+  if (els.btnCadastrar) els.btnCadastrar.addEventListener('click', onCadastrarClick);
+  if (els.btnSair) els.btnSair.addEventListener('click', onSairClick);
+
+  [els.contaSenha, els.contaSenha2].forEach((campo) => {
+    if (!campo) return;
+    campo.addEventListener('keydown', (evento) => {
+      if (evento.key === 'Enter') conectar(contaModo === 'criar');
+    });
+  });
+
+  // Esc e clique fora fecham o menu do avatar.
+  document.addEventListener('keydown', onDocumentoTecla);
+  if (document.body) document.body.addEventListener('click', onDocumentoClick);
+
+  // Painel do administrador — só existe na tela quando o servidor concede o papel.
+  if (els.btnEmitir) els.btnEmitir.addEventListener('click', onEmitirClick);
+  if (els.btnRecarregar) els.btnRecarregar.addEventListener('click', carregarLicencas);
+  if (els.btnSimularFree) {
+    els.btnSimularFree.addEventListener('click', () => onSimularClick('free'));
+  }
+  if (els.btnSimularPremium) {
+    els.btnSimularPremium.addEventListener('click', () => onSimularClick('premium'));
+  }
+  if (els.admApi) els.admApi.addEventListener('change', onApiChange);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1087,6 +1687,20 @@ function onRuntimeMessage(message) {
 
 function onStorageChanged(changes, areaName) {
   if (areaName !== 'local') return;
+
+  // Perfil/sessão mudaram por fora deste pop-up (outra janela, console, o
+  // agendador): reaplica o cache e redesenha — inclusive o painel do admin, que
+  // depende do que o servidor concedeu.
+  if (changes[STORAGE_PERFIL_KEY] || changes[STORAGE_SESSAO_KEY]) {
+    SHARED.aplicarPerfilSalvo()
+      .then(() => {
+        aplicarPerfilNaUI();
+        return loadSettingsToForm();
+      })
+      .then(() => Promise.all([renderConta(), renderAdmin()]))
+      .then(() => refresh())
+      .catch(() => {});
+  }
 
   if (changes[STORAGE_JOBS_KEY]) refresh();
 

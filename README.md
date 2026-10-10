@@ -28,14 +28,17 @@ extensao/
 ├── popup.js        # Fila de termos, orquestração da aba e geração do CSV
 ├── content.js      # Scraping do DOM do LinkedIn, candidatura, fila e storage
 ├── tests/          # Testes que rodam no Node (o shared.js é livre de DOM)
-│   └── smoke-edicoes.js
+│   ├── smoke-edicoes.js        # perfis free/premium e o funil do parseSettings
+│   ├── smoke-conta.js          # o pop-up num DOM falso: conta, plano e painel do admin
+│   └── smoke-ajuda.js          # (temporário) o pedido de ajuda ao usuário
 ├── CHANGELOG.md    # Histórico de versões (a regra está no README)
 └── README.md
 ```
 
 Este repositório é **só a extensão**. A API de licenças (Python) vive num
-repositório **privado** separado — e a extensão ainda **não conversa com ela**:
-falta o encaixe de sessão e a permissão de host no `manifest.json`.
+repositório **privado** separado: a extensão pergunta a ela (`/plano`) quando há
+conta, e o `manifest.json` já declara o host do backend de desenvolvimento
+(`http://127.0.0.1:8787`).
 
 ### Testes
 
@@ -44,8 +47,24 @@ no DOM, então rodam no Node puro e conferem que os cortes do free e o que o
 premium mantém continuam coerentes.
 
 ```sh
-node tests/smoke-edicoes.js
+node tests/smoke-edicoes.js   # perfis, cotas e o funil do parseSettings
+node tests/smoke-conta.js     # o pop-up de verdade num DOM falso
+node tests/smoke-ajuda.js     # (temporário) o pedido de ajuda ao usuário
 ```
+
+O segundo é um **teste de interface sem navegador**: ele monta um DOM falso (um
+elemento para cada `id` do `popup.html`, com os `hidden` do HTML), um
+`chrome.storage.local` em memória e um **servidor de mentira no `fetch`** — e roda
+`edicoes.js`, `shared.js` e `popup.js` como o Chrome faria. Depois abre o pop-up,
+entra como cliente e como administrador e confere o essencial: que o free **não faz
+chamada de rede nenhuma**, que o painel do administrador **só** aparece quando o
+servidor concede, que um `401` devolve a tela ao free e que ficar sem rede **não**
+derruba quem tem assinatura.
+
+O terceiro cobre o **(temporário) pedido de ajuda**: roda o `background.js` de
+verdade com um `chrome` falso (storage, alarms, tabs e notifications) e confere
+que o pedido vira uma notificação com os dois botões e que o clique leva a decisão
+para a aba de origem.
 
 ## Edições (free, portfólio e premium)
 
@@ -55,7 +74,7 @@ Um só código-fonte, três usos:
 | ------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Free**      | instala e usa, **sem conta** | até **2 termos**; cotas **fixas** de **4 por termo**, **3 por hora** e **9 por dia** (sem campos na UI) e "máx. vagas por termo" fixo no código; **sem** agendador e **sem** exportação (botão desabilitado) |
 | **Portfólio** | é a **mesma build** da free  | — (é a free, publicada como código aberto)                                                                            |
-| **Premium**   | conta + **assinatura ativa** | até 40 termos, cotas de termo/hora/24 h/dia ajustáveis, agendador, ritmo humano ajustável e exportação — *(previsto)*  |
+| **Premium**   | conta + **assinatura ativa** | até 40 termos, cotas de termo/hora/24 h/dia ajustáveis, agendador, ritmo humano ajustável e exportação (o CSV é gerado **no servidor**)  |
 
 O que a **free** mantém, mesmo sem conta: a candidatura automática completa
 (Candidatura Simplificada + formulário obrigatório), a captura das vagas com
@@ -66,6 +85,56 @@ A regra de edição passa por um **funil único**: o `edicoes.js` declara o perf
 `shared.js` (`parseSettings`) o impõe — então **pop-up, content script e service
 worker** obedecem ao mesmo limite, sem depender de o usuário "não mexer". A UI
 apenas esconde o que a edição não oferece.
+
+## Conta, assinatura e o painel do administrador
+
+A extensão **não escolhe** a edição: quem concede é o servidor. Sem conta, ela é
+free e não faz **nenhuma** chamada de rede. Com conta, pergunta o plano ao `/plano`
+e obedece ao que voltar — inclusive para **perder** o premium (assinatura vencida,
+atrasada, cancelada ou licença revogada).
+
+**A conta vive no avatar do topo (ao lado do nome do PegaVaga):**
+
+| Onde | O que acontece |
+| ---- | -------------- |
+| **Avatar, sem sessão** | mostra o ícone de pessoa; clicar leva direto à tela **Entrar**, que traz a aba **Criar conta** para quem ainda não tem |
+| **Criar conta** | pede a senha duas vezes (a conferência é local, antes de qualquer chamada) e usa `POST /conta/cadastro` — a conta nasce **usuário**; administrador só existe por semente do servidor |
+| **Avatar, com sessão** | mostra as **iniciais do e-mail** numa cor fixa por conta e o anel do plano (verde no Premium, dourado no administrador); clicar abre o **menu** com **Minha conta**, **Painel de administração** (só com o papel) e **Sair** |
+| **Entrar** | `POST /conta/login` → guarda a sessão (`pegavaga_sessao`), guarda o perfil (`pegavaga_perfil`) e aplica o plano |
+| **Sair** | apaga a credencial e o cache; o selo volta ao Free e a tela volta ao formulário de entrar |
+
+Não há upload de foto: o "rosto" da conta são as **iniciais do e-mail** (o servidor
+não guarda imagem). Os ícones das seções (Configurações, Administração) são SVGs do
+mesmo tamanho, e a tela de conta só aparece quando é chamada pelo avatar.
+
+**O painel 🛠 Administração** (no menu do avatar) aparece **apenas** quando a resposta do servidor traz
+`features.painelAdmin: true` — o que só acontece para uma conta de administrador.
+Não há atalho, botão ou opção que o abra por conta própria: se o painel sumiu, a
+conta perdeu o papel. Com ele dá para:
+
+- **Ver a tela como Free/Premium** — o perfil vem do servidor (`/plano?simular=`) e
+  **não** altera o seu direito;
+- **Emitir/renovar licença** (`POST /admin/licenca` com `acao: "emitir"`) e
+  **revogar** direto na lista;
+- **Trocar o endereço da API** (por padrão, `http://127.0.0.1:8787`).
+
+Três garantias que os testes cobrem:
+
+- **O plano nunca sai do token**: cada `/plano` é reconsultado no cadastro, então
+  cancelar, vencer ou revogar vale **na hora**;
+- **Sessão recusada volta ao free**: um `401` descarta a credencial e a tela volta
+  ao free na mesma abertura;
+- **Rede fora não derruba quem tem assinatura**: o último perfil concedido fica em
+  cache por 6 h e continua valendo até o servidor confirmar de novo.
+
+> A edição decide só a **tela e as cotas locais**. O que vale dinheiro — o CSV — é
+> gerado no **servidor**: sem a feature, o `/exportar` responde `403
+> sem_permissao_export`, mesmo que alguém reabilite o botão pelo DevTools.
+
+Para rodar o backend na sua máquina, use o `docker compose` do repositório privado
+(`./pgv.sh subir`, na pasta acima desta): ele sobe Postgres + API e semeia as
+licenças e contas de teste — por exemplo `premium@pegavaga.test`, senha
+`pegavaga-demo`.
 
 ## Versionamento
 
@@ -242,10 +311,30 @@ Enquanto o `1.0` não sai, tudo é `0.x`. A versão aparece no cabeçalho do pop
   `{ "autorização de trabalho": "Não", "pretensão salarial": "5000" }`.
 - **Ele não inventa o que não sabe**: se mesmo respondendo o possível o
   formulário parar numa pergunta que não dá para preencher (currículo anexo,
-  telefone vazio, pergunta sem opção), ele é **descartado** e a vaga fica
-  marcada como `Travada em campo obrigatório` — o motivo no relatório diz
-  **qual campo** ficou pendente e **o que já foi respondido**
+  telefone vazio, pergunta sem opção), ele **pede a sua ajuda** (item abaixo) e,
+  sem resposta, é **descartado** e a vaga fica marcada como
+  `Travada em campo obrigatório` — o motivo no relatório diz **qual campo** ficou
+  pendente e **o que já foi respondido**
   (ex.: “Campos não preenchidos: Telefone. Respondi sozinho: Sim.”).
+- **(temporário) Pedido de ajuda quando a vaga trava ou demora** — algumas empresas
+  cadastram **campos personalizados** no formulário; a extensão ainda não os trata,
+  então a candidatura pode parar num campo que ela não sabe responder (o LinkedIn
+  marca o campo como inválido) ou o **envio pode demorar a confirmar**. Nesses
+  casos, em vez de desistir calado, o PegaVaga mostra um **aviso na área de
+  trabalho** com a vaga e dois botões:
+  - **Vou preencher à mão** → a automação **para e respeita**: não clica, não fecha
+    nada e espera o formulário sair da tela (até 10 min) enquanto você responde e
+    envia. Depois a varredura continua;
+  - **Pular esta vaga** → o formulário é descartado e a vaga é **pulada de vez**
+    (não gasta cota e não é visitada de novo); a varredura segue para a próxima.
+
+  O aviso fica na tela até você escolher (não expira sozinho), aparece no máximo
+  **uma vez por minuto** (para não virar enxurrada) e, se ninguém responder em
+  5 min, a extensão segue o caminho de sempre (a vaga fica `Formulário incompleto`/
+  `Travada em campo obrigatório` para a próxima passada). `Parar Varredura` encerra
+  a espera na hora. Este comportamento é **temporário**: sai quando os campos
+  personalizados forem tratados de verdade (tudo nele está marcado com
+  `TEMPORÁRIO` no código).
 - **Ritmo humano**: todo intervalo tem variação aleatória, o clique é precedido
   de rolagem + passagem de mouse pelo elemento, há pausas de “leitura” da vaga,
   pausas longas periódicas e a extensão **cede a vez** para você quando está
@@ -286,6 +375,7 @@ Valores possíveis de `Status da candidatura`: `Enviada`,
 `Sem botão de candidatura`, `Formulário não abriu`,
 `Travada em campo obrigatório`, `Formulário incompleto`, `Interrompida (Parar)`,
 `Parada por proteção do LinkedIn`, `Erro na automação`,
+`Preenchida por você (temporário)`, `Pulada por você (temporário)`,
 `Adiada (sem cota ou fora do horário)` e `Não tentada`.
 
 Exemplos de motivo gravado:
@@ -297,6 +387,8 @@ Exemplos de motivo gravado:
 | `Sem botão de candidatura`         | A página da vaga não oferece botão de candidatura.                               |
 | `Travada em campo obrigatório`     | …+ `Campos não preenchidos: Telefone. Respondi sozinho: Sim.`                    |
 | `Formulário incompleto`            | …+ `Parou na etapa 3 de 15.`                                                     |
+| `Preenchida por você (temporário)` | A vaga demorou para confirmar (ou o LinkedIn recusou um campo personalizado) e você escolheu preencher à mão; o PegaVaga não mexeu mais na página. |
+| `Pulada por você (temporário)`     | A vaga demorou para confirmar (ou o LinkedIn recusou um campo personalizado) e você escolheu pular; a varredura seguiu para a próxima. |
 | `Parada por proteção do LinkedIn`  | O LinkedIn pediu verificação ou limite de uso (a automação descansou 1 h).        |
 | `Adiada (sem cota ou fora do…)`    | A cota de candidaturas estourou; esta vaga ficou para a próxima passada.          |
 | `Não tentada`                      | Ainda não chegou a vez desta vaga (teto de vagas por varredura).                 |
@@ -314,6 +406,7 @@ definitivas e as que ficaram na fila).
 | `storage`        | Guardar a configuração, a fila, as vagas e as cotas.           |
 | `activeTab`      | Falar com a aba ativa do LinkedIn a partir do pop-up.         |
 | `alarms`         | Agendador: acordar o service worker no horário escolhido e quando uma cota libera. |
+| `notifications`  | **(temporário)** Mostrar o aviso na área de trabalho quando uma vaga trava num campo personalizado ou o envio demora a confirmar (sai junto com o pedido de ajuda). |
 | `https://www.linkedin.com/*` | Injetar o `content.js`, ler o DOM das vagas e navegar nas abas do LinkedIn. |
 
 Não são necessárias as permissões `tabs` nem `downloads`: a URL da aba do
@@ -379,7 +472,7 @@ relance (a mesma cor nos dois lugares):
 - A luz só redesenha o ícone quando a **cor muda**; os PNGs do logo ficam em
   cache na memória do worker.
 
-## Mensagens trocadas (popup ↔ content)
+## Mensagens trocadas (popup ↔ content ↔ worker)
 
 | Mensagem                | Direção        | Efeito                                   |
 | ----------------------- | -------------- | ---------------------------------------- |
@@ -389,6 +482,9 @@ relance (a mesma cor nos dois lugares):
 | `PEGAVAGA_PING`         | popup → content| Consulta se está varrendo.               |
 | `PEGAVAGA_CLEAR`        | popup → content| Zera o estado em memória e no storage.   |
 | `PEGAVAGA_PROGRESS`     | content → popup/worker | Contador, cotas, pausa (+ motivo), pausa longa, proteção da conta e problema da varredura (é o que acende a **luz do ícone** em tempo real). |
+| `PEGAVAGA_AJUDA_PEDIDO` | content → worker | **(temporário)** Pede o aviso na área de trabalho quando a vaga trava num campo personalizado ou o envio demora a confirmar. O worker só responde `ok` quando a notificação foi criada (sem isso o script não fica esperando à toa). |
+| `PEGAVAGA_AJUDA_RESPOSTA` | worker → content | **(temporário)** A sua decisão no aviso: `manual` (preencher à mão — a automação para e espera) ou `pular` (descarta a vaga e segue para a próxima). |
+| `PEGAVAGA_AJUDA_FECHAR` | content → worker | **(temporário)** A espera acabou (decisão tomada ou prazo estourado): tira o aviso da tela. |
 
 ## Observações importantes
 

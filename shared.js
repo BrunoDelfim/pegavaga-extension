@@ -17,6 +17,9 @@ globalThis.PegaVagaShared = (() => {
     run: 'pegavaga_run', // fila de termos em andamento
     apps: 'pegavaga_apps', // timestamps (ms) das candidaturas enviadas
     guard: 'pegavaga_guard', // bloqueio temporário detectado (proteção da conta)
+    sessao: 'pegavaga_sessao', // { token, email, papel, expiraEm } — a credencial
+    perfil: 'pegavaga_perfil', // { perfil, salvoEm } — cache do último /plano
+    api: 'pegavaga_api', // endereço do backend (vazio = o padrão de desenvolvimento)
   };
 
   /* Tipos de mensagem trocadas entre pop-up, content script e agendador. */
@@ -27,6 +30,10 @@ globalThis.PegaVagaShared = (() => {
     CLEAR: 'PEGAVAGA_CLEAR',
     PROGRESS: 'PEGAVAGA_PROGRESS',
     RESUME: 'PEGAVAGA_RESUME',
+    /* (TEMPORÁRIO) Pedido de ajuda ao usuário — ver a seção abaixo. */
+    AJUDA_PEDIDO: 'PEGAVAGA_AJUDA_PEDIDO', // content → worker: mostre o aviso
+    AJUDA_RESPOSTA: 'PEGAVAGA_AJUDA_RESPOSTA', // worker → content: a sua decisão
+    AJUDA_FECHAR: 'PEGAVAGA_AJUDA_FECHAR', // content → worker: some com o aviso
   };
 
   const LINKEDIN_SEARCH_URL = 'https://www.linkedin.com/jobs/search/';
@@ -117,6 +124,337 @@ globalThis.PegaVagaShared = (() => {
 
   function temFeature(nome) {
     return Boolean(perfilEdicao().features[nome]);
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Sessão e perfil — o servidor concede, o cliente pergunta                  */
+  /* ------------------------------------------------------------------------ */
+  //
+  // Não existe caminho no cliente que ligue o premium: o perfil só muda por
+  // `aplicarDoServidor(payload)`, e o único payload aceito vem de `/plano`
+  // assinado pelo servidor. Sem sessão — ou com a sessão recusada — o perfil é o
+  // free local, que não faz chamada de rede nenhuma.
+  //
+  // O que fica no storage:
+  //   * `pegavaga_sessao` — { token, email, papel }        (credencial)
+  //   * `pegavaga_perfil` — { perfil, salvoEm }            (cache do /plano)
+  // O cache existe para o pop-up e o content script abrirem com o estado certo
+  // sem esperar rede; depois de CACHE_PERFIL_MS ele deixa de valer.
+
+  const API_PADRAO = 'http://127.0.0.1:8787';
+  const CACHE_PERFIL_MS = 6 * 3600000; // 6 h
+
+  /** O storage desta extensão, se estiver disponível (no Node puro não existe). */
+  function extensaoApi() {
+    return typeof chrome !== 'undefined' && chrome && chrome.storage ? chrome.storage.local : null;
+  }
+
+  /** Endereço do backend (o do storage, ou o padrão de desenvolvimento). */
+  async function apiUrl() {
+    const storage = extensaoApi();
+    if (!storage) return API_PADRAO;
+
+    try {
+      const dados = await storage.get(STORAGE.api);
+      const escolhido = String(dados[STORAGE.api] || '').trim().replace(/\/+$/, '');
+      return escolhido || API_PADRAO;
+    } catch (erro) {
+      return API_PADRAO;
+    }
+  }
+
+  /** Endereço configurado ('' quando ninguém mexeu — vale o padrão). */
+  async function lerApi() {
+    const storage = extensaoApi();
+    if (!storage) return '';
+    try {
+      const dados = await storage.get(STORAGE.api);
+      return String(dados[STORAGE.api] || '');
+    } catch (erro) {
+      return '';
+    }
+  }
+
+  /** Troca o endereço do backend (apontar para o servidor de produção, por ex.). */
+  async function salvarApi(url) {
+    const storage = extensaoApi();
+    const limpo = String(url || '').trim();
+    if (storage) {
+      try {
+        await storage.set({ [STORAGE.api]: limpo });
+      } catch (erro) {
+        /* sem storage a troca vale só nesta janela */
+      }
+    }
+    return limpo;
+  }
+
+
+  /** A sessão guardada, ou null — sem token não há sessão. */
+  async function lerSessao() {
+    const storage = extensaoApi();
+    if (!storage) return null;
+
+    try {
+      const dados = await storage.get(STORAGE.sessao);
+      const sessao = dados[STORAGE.sessao];
+      return sessao && sessao.token ? sessao : null;
+    } catch (erro) {
+      return null;
+    }
+  }
+
+  /** Guarda a sessão E o perfil que veio na mesma resposta (login/cadastro). */
+  async function guardarSessao(corpo) {
+    const sessao = {
+      token: corpo && corpo.token ? corpo.token : null,
+      email: corpo && corpo.conta ? corpo.conta.email : null,
+      papel: corpo && corpo.conta ? corpo.conta.papel : null,
+      expiraEm: (corpo && corpo.expiresAt) || null,
+    };
+
+    const storage = extensaoApi();
+    if (storage) {
+      try {
+        await storage.set({
+          [STORAGE.sessao]: sessao,
+          [STORAGE.perfil]: { perfil: corpo, salvoEm: Date.now() },
+        });
+      } catch (erro) {
+        /* sem storage: a sessão vale só nesta janela */
+      }
+    }
+    return sessao;
+  }
+
+  /** Esquece a sessão e o cache, e volta ao free local. */
+  async function limparSessao() {
+    const storage = extensaoApi();
+    if (storage) {
+      try {
+        await storage.remove([STORAGE.sessao, STORAGE.perfil]);
+      } catch (erro) {
+        /* nada a fazer: o perfil em memória volta ao free logo abaixo */
+      }
+    }
+    return aplicarDoServidor(null);
+  }
+
+  /** Aplica o perfil concedido — o ÚNICO caminho que tira o cliente do free. */
+  function aplicarDoServidor(payload) {
+    const edicoes = globalThis.PegaVagaEdicoes;
+    if (edicoes && typeof edicoes.aplicarDoServidor === 'function') {
+      return edicoes.aplicarDoServidor(payload);
+    }
+    return perfilEdicao();
+  }
+
+  /**
+   * Aplica o último perfil concedido que está no cache — SEM rede.
+   *
+   * É o que os três contextos chamam antes de qualquer `parseSettings`: o content
+   * script e o service worker acordam do zero e não podem depender de um fetch
+   * para montar a tela. Cache velho (mais que CACHE_PERFIL_MS) não vale — melhor
+   * voltar ao free local do que obedecer a uma concessão que o servidor pode já
+   * ter cancelado.
+   */
+  async function aplicarPerfilSalvo() {
+    const storage = extensaoApi();
+    if (!storage) return aplicarDoServidor(null);
+
+    let cache = null;
+    try {
+      const dados = await storage.get(STORAGE.perfil);
+      cache = dados[STORAGE.perfil] || null;
+    } catch (erro) {
+      cache = null;
+    }
+
+    const fresco =
+      cache &&
+      cache.perfil &&
+      Number.isFinite(cache.salvoEm) &&
+      Date.now() - cache.salvoEm <= CACHE_PERFIL_MS;
+
+    if (!fresco) return aplicarDoServidor(null);
+
+    aplicarDoServidor(cache.perfil);
+    return cache.perfil;
+  }
+
+  /**
+   * Chama a API. Devolve sempre um resultado no mesmo formato — nunca lança:
+   * `{ ok: true, corpo }` ou `{ ok: false, status, erro, mensagem }`. Sem isso,
+   * cada tela teria o próprio `try/catch` de fetch e o próprio texto de erro.
+   */
+  async function requisitar(caminho, opcoes) {
+    const config = opcoes || {};
+    const sessao = config.token ? null : await lerSessao();
+    const token = config.token || (sessao && sessao.token);
+
+    const cabecalhos = { 'Content-Type': 'application/json' };
+    if (token) cabecalhos.Authorization = 'Bearer ' + token;
+
+    const endereco = await apiUrl();
+    let resposta;
+
+    try {
+      resposta = await fetch(endereco + caminho, {
+        method: config.metodo || 'GET',
+        headers: cabecalhos,
+        body: config.corpo ? JSON.stringify(config.corpo) : undefined,
+      });
+    } catch (erro) {
+      return {
+        ok: false,
+        erro: 'rede',
+        mensagem: 'Não foi possível falar com o servidor (' + endereco + ').',
+      };
+    }
+
+    let dados = null;
+    try {
+      dados = await resposta.json();
+    } catch (erro) {
+      dados = null;
+    }
+
+    if (!resposta.ok) {
+      return {
+        ok: false,
+        status: resposta.status,
+        erro: (dados && dados.erro) || 'falha',
+        mensagem: (dados && dados.mensagem) || 'O servidor recusou o pedido.',
+      };
+    }
+
+    return { ok: true, status: resposta.status, corpo: dados };
+  }
+
+  /** Guarda o perfil recebido no cache (para os contextos aplicarem sem rede). */
+  async function guardarCachePerfil(corpo) {
+    const storage = extensaoApi();
+    if (!storage) return corpo;
+
+    try {
+      await storage.set({ [STORAGE.perfil]: { perfil: corpo, salvoEm: Date.now() } });
+    } catch (erro) {
+      /* sem cache o próximo contexto cai no free até sincronizar de novo */
+    }
+    return corpo;
+  }
+
+  /** O storage desta extensão, se estiver disponível (no Node puro não existe). */
+  function extensaoApi() {
+    return typeof chrome !== 'undefined' && chrome && chrome.storage ? chrome.storage.local : null;
+  }
+
+  /**
+   * Entra com e-mail e senha. Sucesso = sessão guardada + perfil aplicado, sem
+   * nenhum caminho alternativo: é a mesma função que o cadastro usa.
+   */
+  async function entrar(email, senha) {
+    const resposta = await requisitar('/conta/login', {
+      metodo: 'POST',
+      corpo: { email: email, senha: senha },
+    });
+
+    if (!resposta.ok) return resposta;
+
+    await guardarSessao(resposta.corpo);
+    aplicarDoServidor(resposta.corpo);
+    return { ok: true, corpo: resposta.corpo };
+  }
+
+  /** Cria a conta (nasce `usuario` — o papel é do servidor) e já entra. */
+  async function cadastrar(email, senha) {
+    const resposta = await requisitar('/conta/cadastro', {
+      metodo: 'POST',
+      corpo: { email: email, senha: senha },
+    });
+
+    if (!resposta.ok) return resposta;
+
+    await guardarSessao(resposta.corpo);
+    aplicarDoServidor(resposta.corpo);
+    return { ok: true, corpo: resposta.corpo };
+  }
+
+  /** Sai: apaga a credencial e o cache, e a tela volta ao free. */
+  async function sair() {
+    await limparSessao();
+    return { ok: true };
+  }
+
+  /**
+   * Pergunta o plano de novo (o único jeito de ganhar/perder premium na tela).
+   *
+   * Sem sessão, nem chama a rede: free é local. Com sessão recusada (401/403), a
+   * credencial é descartada e o free volta. Sem rede, mantém o cache — derrubar o
+   * usuário para o free por causa de um Wi-Fi ruim seria pior do que esperar.
+   */
+  async function sincronizarPlano() {
+    const sessao = await lerSessao();
+    if (!sessao || !sessao.token) {
+      aplicarDoServidor(null);
+      return { ok: true, perfil: null };
+    }
+
+    const resposta = await requisitar('/plano', { token: sessao.token });
+
+    if (resposta.ok) {
+      await guardarCachePerfil(resposta.corpo);
+      aplicarDoServidor(resposta.corpo);
+      return { ok: true, perfil: resposta.corpo };
+    }
+
+    if (resposta.status === 401 || resposta.status === 403) {
+      await limparSessao();
+      return resposta;
+    }
+
+    await aplicarPerfilSalvo();
+    return resposta;
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Administração (só o que o servidor permitir)                              */
+  /* ------------------------------------------------------------------------ */
+  //
+  // Estas funções não decidem nada: elas chamam as rotas `/admin/*` e devolvem a
+  // resposta. Quem é administrador é o cadastro do servidor — aqui só existe a
+  // tela, e um 403 é a resposta correta (e esperada) para um usuário comum.
+
+  /** Lista as licenças: chave, plano, estado, validade, e-mail e navegadores. */
+  async function listarLicencas() {
+    const resposta = await requisitar('/admin/licencas');
+    if (!resposta.ok) return resposta;
+
+    return { ok: true, licencas: (resposta.corpo && resposta.corpo.licencas) || [] };
+  }
+
+  /** Emite (`acao: 'emitir'`) ou revoga (`acao: 'revogar'`) uma licença. */
+  async function emitirLicenca(dados) {
+    const resposta = await requisitar('/admin/licenca', { metodo: 'POST', corpo: dados });
+    if (!resposta.ok) return resposta;
+
+    return { ok: true, licenca: resposta.corpo };
+  }
+
+  /**
+   * "Ver como" o outro plano: pede ao servidor o perfil de free/premium e aplica.
+   *
+   * Quem monta o perfil é o servidor — o cliente não decide nada nem aqui. O
+   * direito real não muda: `sincronizarPlano` devolve o perfil de verdade na
+   * próxima sincronização. De propósito, NÃO grava no cache: simulação não pode
+   * virar o perfil que o content script aplica.
+   */
+  async function simularPlano(chave) {
+    const resposta = await requisitar('/plano?simular=' + encodeURIComponent(chave));
+    if (!resposta.ok) return resposta;
+
+    aplicarDoServidor(resposta.corpo);
+    return { ok: true, perfil: resposta.corpo };
   }
 
   /* ------------------------------------------------------------------------ */
@@ -613,6 +951,20 @@ globalThis.PegaVagaShared = (() => {
       reason:
         'O formulário não foi concluído dentro do tempo e do número de etapas permitidos.',
     },
+    /* (TEMPORÁRIO) Desfechos do pedido de ajuda — ver "Pedido de ajuda ao
+     * usuário" abaixo. Saem junto com ele. */
+    manual: {
+      label: 'Preenchida por você (temporário)',
+      failure: true,
+      reason:
+        'A vaga demorou para confirmar (ou o LinkedIn recusou um campo personalizado) e você escolheu preencher à mão; o PegaVaga não mexeu mais na página.',
+    },
+    pulada: {
+      label: 'Pulada por você (temporário)',
+      failure: true,
+      reason:
+        'A vaga demorou para confirmar (ou o LinkedIn recusou um campo personalizado) e você escolheu pular; a varredura seguiu para a próxima.',
+    },
     cancelada: {
       label: 'Interrompida (Parar)',
       failure: true,
@@ -636,6 +988,77 @@ globalThis.PegaVagaShared = (() => {
 
   const APPLY_PENDING_LABEL = 'Adiada (sem cota ou fora do horário)';
   const APPLY_UNTOUCHED_LABEL = 'Não tentada';
+
+  /* ------------------------------------------------------------------------ */
+  /* (TEMPORÁRIO) Pedido de ajuda ao usuário                                   */
+  /* ------------------------------------------------------------------------ */
+  //
+  // Algumas vagas param num campo personalizado que a extensão ainda não sabe
+  // responder — ou demoram para confirmar o envio. Nesses casos o PegaVaga avisa
+  // na área de trabalho e pergunta o que fazer: esperar enquanto você preenche à
+  // mão, ou pular esta vaga e seguir para a próxima. Este bloco é o contrato do
+  // aviso (mensagens, textos, id e botões); o dia em que os campos personalizados
+  // forem tratados de verdade, tudo aqui — e quem usa — sai junto.
+
+  /** Motivos que disparam o aviso, com o texto que o usuário lê. */
+  const AJUDA_MOTIVOS = {
+    campos: 'O formulário parou num campo que a extensão não sabe responder.',
+    demora: 'O LinkedIn não confirmou a candidatura no tempo esperado.',
+  };
+
+  /** Botões do aviso, na ordem em que o Chrome os mostra. */
+  const AJUDA_BOTOES = ['Vou preencher à mão', 'Pular esta vaga'];
+
+  /** O que cada botão significa: `manual` espera você; `pular` segue adiante. */
+  const AJUDA_ACOES = ['manual', 'pular'];
+
+  /** Ação do botão pelo índice clicado ('' quando o índice não é nosso). */
+  function acaoDaAjuda(indice) {
+    const i = Number(indice);
+    return Number.isInteger(i) && i >= 0 && i < AJUDA_ACOES.length ? AJUDA_ACOES[i] : '';
+  }
+
+  /**
+   * Id do aviso na área de trabalho. Carrega a **aba de origem** de propósito: o
+   * clique pode acordar o service worker do zero, e é o id que diz para quem a
+   * decisão deve voltar (o `sender` da notificação original já não existe).
+   */
+  function ajudaId(tabId, pedidoId) {
+    return 'pegavaga-ajuda:' + String(tabId == null ? '' : tabId) + ':' + String(pedidoId || '');
+  }
+
+  /** Lê o id do aviso: { tabId, pedidoId } — ou null se não for um aviso nosso. */
+  function lerAjudaId(id) {
+    const partes = String(id || '').split(':');
+    if (partes.length !== 3 || partes[0] !== 'pegavaga-ajuda') return null;
+    if (!partes[1] || !partes[2]) return null; // sem aba ou sem pedido não há resposta
+
+    const tabId = Number(partes[1]);
+    if (!Number.isInteger(tabId)) return null;
+
+    return { tabId, pedidoId: partes[2] };
+  }
+
+  /**
+   * Texto do aviso (título + corpo) que o worker mostra na notificação. Sem
+   * "detalhe técnico" aqui: o que o usuário precisa saber é qual vaga travou e
+   * quais são as duas escolhas.
+   */
+  function textoDaAjuda(dados) {
+    const info = dados || {};
+    const vaga = [info.titulo, info.empresa].filter(Boolean).join(' — ');
+    const motivo = AJUDA_MOTIVOS[info.motivo] || AJUDA_MOTIVOS.campos;
+    const problema = info.problema ? ' Problema: ' + String(info.problema).slice(0, 120) + '.' : '';
+
+    return {
+      title: 'PegaVaga precisa de você (temporário)',
+      message:
+        (vaga ? vaga + ': ' : '') +
+        motivo +
+        problema +
+        ' Você pode preencher esta vaga à mão (a automação espera) ou pular para a próxima.',
+    };
+  }
 
   /* ------------------------------------------------------------------------ */
   /* Candidatura automática: motivos e resumo do relatório                     */
@@ -1308,6 +1731,13 @@ globalThis.PegaVagaShared = (() => {
     APPLY_PENDING,
     APPLY_KINDS,
     DIALOG_KINDS,
+    AJUDA_MOTIVOS,
+    AJUDA_BOTOES,
+    AJUDA_ACOES,
+    acaoDaAjuda,
+    ajudaId,
+    lerAjudaId,
+    textoDaAjuda,
     num,
     normalizeTerms,
     isLinkedInUrl,
@@ -1345,5 +1775,17 @@ globalThis.PegaVagaShared = (() => {
     formatClock,
     perfilEdicao,
     temFeature,
+    aplicarDoServidor,
+    aplicarPerfilSalvo,
+    sincronizarPlano,
+    lerSessao,
+    entrar,
+    cadastrar,
+    sair,
+    lerApi,
+    salvarApi,
+    listarLicencas,
+    emitirLicenca,
+    simularPlano,
   };
 })();

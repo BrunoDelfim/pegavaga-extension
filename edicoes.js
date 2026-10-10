@@ -7,9 +7,11 @@
  * aplica o perfil ativo ao normalizar a configuração, e a UI esconde o que a
  * edição não oferece.
  *
- * Hoje a edição ativa é sempre a "free" — que é exatamente a mesma build do
- * portfólio (código aberto). O premium entra depois, por conta/assinatura: quando
- * o backend confirmar o plano, basta chamar PegaVagaEdicoes.definir('premium').
+ * A edição ativa começa no "free" — que é exatamente a mesma build do portfólio
+ * (código aberto). O premium só entra por conta/assinatura: o `shared.js` chama o
+ * `/plano` e entrega a resposta a `aplicarDoServidor`. Não existe — de propósito —
+ * nenhum outro caminho no cliente que ligue o premium: não há `definir()`, e o
+ * que resta é obedecer ao perfil que o servidor assinou.
  * ===========================================================================*/
 
 'use strict';
@@ -41,6 +43,10 @@ globalThis.PegaVagaEdicoes = (() => {
         furtividadeConfig: false, // ritmo humano fixo (não editável)
         cotasAvancadas: false, // sem 24 h/dia editáveis
         scanConfig: false, // "Máx. vagas por termo" é trava fixa, não campo
+        // Não é da edição, é do PAPEL da conta: o servidor liga isto para quem
+        // é administrador. Aqui fica sempre false — e as duas edições precisam
+        // declarar a mesma lista de chaves (o backend confere chave por chave).
+        painelAdmin: false,
       },
       limites: {
         maxTermos: 2,
@@ -72,6 +78,7 @@ globalThis.PegaVagaEdicoes = (() => {
         furtividadeConfig: true,
         cotasAvancadas: true,
         scanConfig: true,
+        painelAdmin: false, // do papel, não da edição — ver o comentário no free
       },
       limites: {
         maxTermos: 40,
@@ -88,8 +95,8 @@ globalThis.PegaVagaEdicoes = (() => {
 
   /* A edição ativa começa no free: 100% local, sem conta e sem rede. O premium
    * só entra depois de conta + assinatura válida, e quem concede é o servidor —
-   * por isso o perfil remoto chega por `aplicarDoServidor`, nunca por um valor que
-   * o cliente possa forjar sozinho. */
+   * por isso o perfil remoto chega por `aplicarDoServidor` e não existe (nem
+   * existirá) uma função que o ligue localmente. */
   let ativa = 'free';
   let perfilServidor = null;
 
@@ -102,14 +109,6 @@ globalThis.PegaVagaEdicoes = (() => {
 
   function atual() {
     return perfil(ativa);
-  }
-
-  function definir(chave) {
-    if (PERFIS[chave]) {
-      perfilServidor = null; // voltar ao perfil local descarta a concessão remota
-      ativa = chave;
-    }
-    return atual();
   }
 
   /**
@@ -174,7 +173,6 @@ globalThis.PegaVagaEdicoes = (() => {
     FURTIVIDADE_SAO,
     perfil,
     atual,
-    definir,
     aplicarDoServidor,
     temFeature,
     chaveAtiva,

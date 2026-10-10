@@ -7,12 +7,15 @@
       :root {
         --bg: #0a66c2;
         --bg-dark: #004182;
+        --bg-soft: #eaf2fb;
         --ok: #1f9d55;
         --warn: #b7791f;
         --error: #c53030;
         --text: #1f2933;
         --muted: #64748b;
         --line: #e2e8f0;
+        --card: #ffffff;
+        --radius: 12px;
       }
 
       * {
@@ -27,13 +30,21 @@
           sans-serif;
         font-size: 13px;
         color: var(--text);
-        background: #f8fafc;
+        background: #f5f7fa;
       }
 
       header {
-        background: var(--bg);
+        background: linear-gradient(135deg, var(--bg) 0%, var(--bg-dark) 100%);
         color: #fff;
-        padding: 12px 14px;
+        padding: 10px 12px 12px;
+      }
+
+      /* Título (com a luz de status) e o avatar da conta na mesma linha. */
+      .top-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
       }
 
       header h1 {
@@ -406,21 +417,504 @@
         margin: 0;
         padding: 0;
       }
+      /* ---------------------------------------------------------------------
+         Conta: avatar no topo, menu de opções e a tela de entrar/criar conta.
+         O Premium só existe com conta — e quem concede é o servidor.
+         --------------------------------------------------------------------- */
+
+      .avatar {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        margin: 0;
+        border: 1.5px solid var(--line);
+        border-radius: 50%;
+        background: var(--bg-soft);
+        color: var(--bg-dark);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        line-height: 1;
+        cursor: default;
+        transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+      }
+
+      .avatar .avatar-ico {
+        width: 15px;
+        height: 15px;
+      }
+
+      /* No cabeçalho o avatar é um botão sobre o gradiente. */
+      header .avatar {
+        border-color: rgba(255, 255, 255, 0.55);
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      header .avatar:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.3);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      }
+
+      header .avatar:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 2px;
+      }
+
+      /* Anel do plano: verde com assinatura ativa, dourado para administrador. */
+      header .avatar.pro {
+        border-color: #4ade80;
+        box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.22);
+      }
+
+      header .avatar.admin {
+        border-color: #fbbf24;
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.25);
+      }
+
+      /* Menu do avatar: as opções da conta (só quando há sessão). */
+      .menu {
+        position: absolute;
+        top: 40px;
+        right: 8px;
+        z-index: 30;
+        width: 232px;
+        padding: 6px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+        animation: menu-in 0.13s ease-out;
+      }
+
+      @keyframes menu-in {
+        from {
+          opacity: 0;
+          transform: translateY(-6px) scale(0.98);
+        }
+      }
+
+      .menu-head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 8px;
+      }
+
+      .menu-head .avatar {
+        width: 30px;
+        height: 30px;
+        font-size: 11px;
+      }
+
+      .menu-quem {
+        min-width: 0;
+      }
+
+      .menu-quem strong,
+      .menu-quem span {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .menu-quem strong {
+        font-size: 12px;
+        color: var(--text);
+      }
+
+      .menu-quem span {
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .menu-sep {
+        height: 1px;
+        margin: 4px 6px;
+        background: var(--line);
+      }
+
+      .menu button {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        margin: 0;
+        padding: 8px 9px;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 500;
+        text-align: left;
+      }
+
+      .menu button svg {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        opacity: 0.7;
+      }
+
+      .menu button:hover:not(:disabled) {
+        background: var(--bg-soft);
+        color: var(--bg-dark);
+      }
+
+      .menu button.perigo:hover:not(:disabled) {
+        background: #fff5f5;
+        color: var(--error);
+      }
+
+      /* Cartão: a cara da conta (e do painel do administrador). */
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .card-head .avatar {
+        width: 34px;
+        height: 34px;
+        font-size: 12px;
+      }
+
+      .card-head strong {
+        display: block;
+        font-size: 13px;
+        color: var(--text);
+      }
+
+      .card-head .hint {
+        margin: 2px 0 0;
+      }
+
+      .icon-btn {
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        margin: 0 0 0 auto;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1;
+      }
+
+      .icon-btn:hover:not(:disabled) {
+        background: #f1f5f9;
+        color: var(--text);
+      }
+
+      /* Abas Entrar / Criar conta. */
+      .tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3px;
+        margin: 12px 0 2px;
+        padding: 3px;
+        background: #eef2f7;
+        border-radius: 9px;
+      }
+
+      .tabs .tab {
+        width: 100%;
+        margin: 0;
+        padding: 7px 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .tabs .tab[aria-selected="true"] {
+        background: #fff;
+        color: var(--bg-dark);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+      }
+
+      /* Painel do administrador: existe na tela SÓ quando o servidor concede. */
+      #admin-panel {
+        border-style: dashed;
+      }
+
+      /* Formulário da conta (entrar e criar). */
+      #conta label {
+        display: block;
+        margin: 10px 0 4px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      #conta input {
+        width: 100%;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--text);
+        background: #fff;
+      }
+
+      #conta input:focus {
+        outline: none;
+        border-color: var(--bg);
+        box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.15);
+      }
+
+      #conta .primario {
+        width: 100%;
+        margin: 12px 0 0;
+        padding: 10px;
+        border-radius: 8px;
+        background: var(--bg);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      #conta .primario:hover:not(:disabled) {
+        background: var(--bg-dark);
+      }
+
+      #conta-logado {
+        margin-top: 10px;
+      }
+
+      #btn-sair {
+        width: auto;
+        margin: 6px 0 0;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      #btn-sair:hover:not(:disabled) {
+        border-color: #feb2b2;
+        background: #fff5f5;
+        color: var(--error);
+      }
+
+      /* Ícones das seções: todos do mesmo tamanho — nada maior que o outro. */
+      details.settings > summary svg {
+        width: 14px;
+        height: 14px;
+        margin-right: 6px;
+        vertical-align: -2px;
+      }
+
+      #admin-panel {
+        padding: 10px 12px;
+      }
+
+      #admin-panel button {
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      #btn-emitir {
+        width: 100%;
+        margin-top: 10px;
+        background: var(--bg);
+        color: #fff;
+      }
+
+      #btn-recarregar {
+        width: 100%;
+        margin-top: 6px;
+        background: #eef2f7;
+        color: #334155;
+      }
+
+      #admin-panel .licencas {
+        margin: 6px 0 0;
+        padding: 0;
+        list-style: none;
+        font-size: 11px;
+      }
+
+      #admin-panel .licencas li {
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      /* Selo da build quando o perfil não é o de produção (free). */
+      .build.premium {
+        background: rgba(255, 255, 255, 0.32);
+      }
     </style>
   </head>
   <body>
     <header>
-      <h1>
-        PegaVaga
-        <span class="light" id="status-light" role="status" title=""></span>
-      </h1>
+      <div class="top-line">
+        <h1>
+          PegaVaga
+          <span class="light" id="status-light" role="status" title=""></span>
+        </h1>
+
+        <!-- Conta: o avatar mostra as iniciais de quem está conectado (o ícone de
+             pessoa quando não há sessão). O anel fica verde com assinatura ativa e
+             dourado quando o SERVIDOR concede o papel de administrador. -->
+        <button
+          class="avatar"
+          id="btn-conta"
+          type="button"
+          aria-haspopup="true"
+          aria-expanded="false"
+          title="Entrar ou criar conta"
+        >
+          <span id="avatar-letras"></span>
+          <svg
+            id="avatar-ico"
+            class="avatar-ico"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-8 1.7-8 5v1h16v-1c0-3.3-4.7-5-8-5Z"
+            />
+          </svg>
+        </button>
+      </div>
+
       <p>
         Rastreamento de vagas do LinkedIn
         <span class="build" id="build-info"></span>
       </p>
     </header>
 
+    <!-- Menu do avatar: as opções da conta. Com sessão ele oferece "Minha conta",
+         o painel do administrador (só quando o servidor concede) e "Sair"; sem
+         sessão, leva direto ao formulário de entrar ou criar conta. -->
+    <div class="menu" id="conta-menu" hidden role="menu" aria-label="Conta">
+      <div class="menu-head">
+        <span class="avatar" id="menu-avatar"></span>
+        <div class="menu-quem">
+          <strong id="menu-nome">Você não está conectado</strong>
+          <span id="menu-plano">Free — tudo local, sem conta</span>
+        </div>
+      </div>
+
+      <div class="menu-sep"></div>
+
+      <button id="btn-menu-entrar" type="button" role="menuitem">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M10 17v-3H3v-4h7V7l5 5-5 5Zm2-15h7a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-7v-2h7V4h-7V2Z" />
+        </svg>
+        Entrar
+      </button>
+
+      <button id="btn-menu-criar" type="button" role="menuitem">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-8 1.7-8 5v1h13.4a6.5 6.5 0 0 1-.4-6Zm9 0v3h3v2h-3v3h-2v-3h-3v-2h3v-3h2Z" />
+        </svg>
+        Criar conta
+      </button>
+
+      <button id="btn-menu-conta" type="button" role="menuitem" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Zm-1 13-3-3 1.4-1.4L11 12.2l3.6-3.6L16 10l-5 5Z" />
+        </svg>
+        Minha conta
+      </button>
+
+      <button id="btn-menu-admin" type="button" role="menuitem" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" />
+        </svg>
+        Painel de administração
+      </button>
+
+      <button class="perigo" id="btn-menu-sair" type="button" role="menuitem" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M14 17v-3h7v-4h-7V7l-5 5 5 5Zm-2-15H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7v-2H5V4h7V2Z" />
+        </svg>
+        Sair da conta
+      </button>
+    </div>
+
     <main>
+      <!-- Conta: o único caminho para o Premium. Sem conta, o PegaVaga roda no
+           free — 100% local, sem nenhuma chamada de rede. O plano é sempre o que
+           o servidor responder em `/plano`; não há como escolher edição aqui. -->
+      <section class="card" id="conta" hidden>
+        <div class="card-head">
+          <span class="avatar" id="conta-avatar"></span>
+          <div>
+            <strong id="conta-titulo">Entrar</strong>
+            <p class="hint" id="conta-estado">Você está no Free — tudo local, sem conta.</p>
+          </div>
+          <button class="icon-btn" id="btn-conta-fechar" type="button" title="Fechar">
+            ✕
+          </button>
+        </div>
+
+        <div id="conta-form">
+          <div class="tabs">
+            <button class="tab" id="conta-aba-entrar" type="button" aria-selected="true">
+              Entrar
+            </button>
+            <button class="tab" id="conta-aba-criar" type="button" aria-selected="false">
+              Criar conta
+            </button>
+          </div>
+
+          <label for="conta-email">E-mail</label>
+          <input
+            id="conta-email"
+            type="email"
+            autocomplete="username"
+            placeholder="voce@exemplo.com"
+          />
+
+          <label for="conta-senha">Senha</label>
+          <input id="conta-senha" type="password" autocomplete="current-password" />
+
+          <div id="conta-confirma" hidden>
+            <label for="conta-senha2">Confirmar senha</label>
+            <input id="conta-senha2" type="password" autocomplete="new-password" />
+          </div>
+
+          <button class="primario" id="btn-entrar" type="button">Entrar</button>
+          <button class="primario" id="btn-cadastrar" type="button" hidden>
+            Criar conta e entrar
+          </button>
+
+          <p class="hint" id="conta-dica"></p>
+        </div>
+
+        <div id="conta-logado" hidden>
+          <p class="hint" id="conta-quem"></p>
+          <button id="btn-sair" type="button">Sair desta conta</button>
+        </div>
+
+        <p class="hint" id="conta-aviso"></p>
+      </section>
+
       <div class="counter">
         <div>
           <span class="value" id="count">0</span>
@@ -435,7 +929,14 @@
       <div class="status warn" id="guard-info" hidden></div>
 
       <details class="settings" id="settings">
-        <summary>⚙ Configurações</summary>
+        <summary>
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path
+              d="M19.14 12.94a7.5 7.5 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.62l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.86a.5.5 0 0 0 .12.62l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.62l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.21.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.62l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"
+            />
+          </svg>
+          Configurações
+        </summary>
 
         <label for="base-url">URL de busca ou perfil</label>
         <input
@@ -621,6 +1122,70 @@
         </div>
 
         <p class="hint" id="settings-hint">Salvo automaticamente.</p>
+      </details>
+
+      <!-- Painel do administrador: aparece SÓ quando o servidor concede
+           (`features.painelAdmin` na resposta de /plano). Nada aqui é decidido no
+           cliente — cada botão chama uma rota /admin/*, e a resposta do servidor
+           manda. Se o painel sumir, a conta perdeu o papel. -->
+      <details class="settings card" id="admin-panel" hidden>
+        <summary>
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" />
+          </svg>
+          Administração
+        </summary>
+
+        <p class="hint">
+          Só a conta de administrador vê este painel. Emitir e revogar licença vale
+          na hora: o plano é reconsultado pelo servidor a cada pedido.
+        </p>
+
+        <span class="sub">Ver a tela como</span>
+        <div class="grid2">
+          <div><button id="btn-simular-free" type="button">Free</button></div>
+          <div><button id="btn-simular-premium" type="button">Premium</button></div>
+        </div>
+
+        <span class="sub">Emitir / renovar licença</span>
+        <div class="grid2">
+          <div>
+            <label for="adm-chave">Chave</label>
+            <input id="adm-chave" type="text" placeholder="PGV-CLIENTE-0001" />
+          </div>
+          <div>
+            <label for="adm-email">E-mail da conta</label>
+            <input id="adm-email" type="email" placeholder="cliente@exemplo.com" />
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label for="adm-dias">Validade (dias, 0 = não expira)</label>
+            <input id="adm-dias" type="number" min="0" step="1" value="30" />
+          </div>
+          <div>
+            <label for="adm-estado">Estado</label>
+            <select id="adm-estado">
+              <option value="active">active</option>
+              <option value="trial">trial</option>
+              <option value="past_due">past_due</option>
+              <option value="canceled">canceled</option>
+              <option value="expired">expired</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="btn-emitir" type="button">Emitir licença</button>
+        <button id="btn-recarregar" type="button">Atualizar a lista</button>
+
+        <span class="sub">Licenças</span>
+        <ul class="licencas" id="adm-lista"></ul>
+
+        <label for="adm-api">Endereço da API</label>
+        <input id="adm-api" type="url" placeholder="http://127.0.0.1:8787" />
+
+        <p class="hint" id="adm-status"></p>
       </details>
 
       <button id="btn-start" type="button">▶ Iniciar Busca e Varredura</button>

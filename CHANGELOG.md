@@ -33,6 +33,63 @@ pronto para usar, e depois `1.1`, `2.0`…
   assinatura** (é o que "libera campos e opções"), e `aplicarDoServidor(null)`
   volta ao free. O free segue **100% local e sem chamadas de rede** — a API só é
   consultada quando há assinatura.
+- **Conta na extensão** (`popup.html`/`popup.js`/`shared.js`): seção **👤 Conta**
+  para entrar (`POST /conta/login`), criar conta (`POST /conta/cadastro`) e sair. A
+  sessão fica em `pegavaga_sessao` e o último perfil concedido em `pegavaga_perfil`
+  — é esse cache que o content script e o service worker aplicam **antes** de
+  normalizar as settings, sem nenhuma chamada de rede. O free anônimo segue **100%
+  local**: sem sessão, a API não é consultada.
+- **A conta na tela** (`popup.html`/`popup.js`): o avatar fica no topo, ao lado do
+  nome, com as **iniciais do e-mail** numa cor fixa por conta e o anel do plano
+  (verde no Premium, dourado no administrador — as iniciais substituem o ícone de
+  pessoa). Com sessão, clicar abre o **menu** de opções (**Minha conta**, **Painel
+  de administração** — só com o papel concedido — e **Sair**); sem sessão, leva
+  direto à tela **Entrar**, que traz a aba **Criar conta** e pede a senha duas vezes
+  (conferência local, antes de qualquer chamada). O menu fecha com `Esc` ou clique
+  fora, e os ícones das seções viraram SVGs do mesmo tamanho.
+- **O plano volta a ser conferido** (`shared.js`): `sincronizarPlano()` pergunta o
+  `/plano` e aplica via `aplicarDoServidor`; `401`/`403` descartam a credencial e
+  devolvem a tela ao free; falha de **rede** mantém o cache (6 h) em vez de derrubar
+  quem tem assinatura.
+- **Painel do administrador** (`popup.html`/`popup.js`): aparece **só** quando a
+  resposta do servidor traz `features.painelAdmin: true` — nenhum atalho, botão ou
+  opção o abre por conta própria. Dele saem "ver a tela como Free/Premium"
+  (`/plano?simular=`, que **não** altera direito nenhum), emitir/renovar licença,
+  revogar pela lista e trocar o endereço da API.
+- `manifest.json`: `host_permissions` do backend de desenvolvimento
+  (`http://127.0.0.1:8787` e `http://localhost:8787`), para o pop-up e o service
+  worker poderem falar com a API.
+- **(temporário) Pedido de ajuda quando a vaga trava ou demora** (`shared.js`,
+  `content.js`, `background.js`): algumas empresas cadastram **campos
+  personalizados** no formulário e a extensão ainda não os trata — a candidatura
+  pode parar num campo que ela não sabe responder (o LinkedIn marca o campo como
+  inválido) ou o **envio pode demorar a confirmar**. Nesses casos o PegaVaga mostra
+  um **aviso na área de trabalho** (permissão `notifications`, com o título e a
+  empresa da vaga) e pergunta o que fazer: **Vou preencher à mão** (a automação para
+  e espera o formulário sair da tela, respeitando você) ou **Pular esta vaga** (o
+  formulário é descartado e a vaga é pulada de vez, sem gastar cota). O aviso tem
+  no máximo **um pedido por minuto**, espera até **5 min** pela resposta e o `Parar
+  Varredura` encerra a espera na hora. Os desfechos novos são
+  `Preenchida por você (temporário)` e `Pulada por você (temporário)`, e o id da
+  notificação carrega a **aba de origem** (o clique pode acordar o worker do zero).
+  Tudo nesse caminho está marcado com `TEMPORÁRIO` no código: sai quando os campos
+  personalizados forem tratados de verdade.
+- `tests/smoke-conta.js`: teste de fumaça da **interface sem navegador** — DOM falso
+  (um elemento por `id` do `popup.html`, com os `hidden` do arquivo),
+  `chrome.storage.local` em memória e um **servidor de mentira no `fetch`** rodando
+  o `popup.js` de verdade. Cobre: free sem nenhuma chamada de rede; o avatar sem
+  sessão levando à tela de entrar (e a de criar pedindo a senha duas vezes, sem
+  rede quando diferem); login de cliente e de administrador; o menu do avatar com
+  as opções de cada sessão (e o avatar em anel verde/dourado); o painel do admin
+  aparecendo **só** com a concessão do servidor; emitir e revogar licença; a
+  simulação não sobrescrevendo o cache; `401` voltando ao free; rede fora
+  preservando o premium; e cache velho caindo no free.
+- `pgv.sh test` passou a rodar os **três** testes da extensão.
+- `tests/smoke-ajuda.js`: teste de fumaça do **(temporário) pedido de ajuda** — o
+  contrato no `shared.js` (textos, botões, id do aviso e os desfechos
+  `manual`/`pulada`) e o `background.js` **rodando** com um `chrome` falso
+  (storage, alarms, tabs e notifications): o pedido vira notificação com os dois
+  botões, o clique leva a decisão para a aba de origem e o aviso sai da tela.
 - **Selo de versão e edição** no cabeçalho do pop-up.
 - `tests/smoke-edicoes.js`: teste de fumaça que roda no Node puro (o `shared.js` é
   livre de DOM) cobrindo as regras de free e premium.
@@ -53,3 +110,16 @@ pronto para usar, e depois `1.1`, `2.0`…
 - `manifest.json`: `version` de `1.4.2` para `0.1`, já sob a nova convenção.
 - `README.md`: abertura corrigida (não promete mais recursos que a edição free não
   tem) e novas seções **Edições** e **Versionamento**.
+
+### Removido
+
+- **Painel de teste de edição** (o gatilho de 5 cliques no selo e o seletor
+  Free/Premium/API): a edição deixou de ser escolha do cliente. Quem concede é o
+  servidor, e o único caminho que tira a extensão do free é `aplicarDoServidor`.
+- `PegaVagaEdicoes.definir()` — não existe mais função pública que ligue o premium
+  localmente (o `smoke-edicoes.js` confere que ela não voltou).
+- `PegaVagaShared.salvarEdicao`, `aplicarEdicaoSalva`, `modoEdicaoSalvo`,
+  `modoEdicaoAtual`, `aplicarModoEdicao`, `lerPainelDev`, `salvarPainelDev` e as
+  chaves `pegavaga_edicao`/`pegavaga_dev` — substituídas por sessão
+  (`pegavaga_sessao`) e pelo cache do plano (`pegavaga_perfil`).
+- `tests/smoke-painel-teste.js`, substituído por `tests/smoke-conta.js`.

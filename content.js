@@ -59,6 +59,9 @@
     CLEAR: 'PEGAVAGA_CLEAR',
     PROGRESS: 'PEGAVAGA_PROGRESS',
     RESUME: 'PEGAVAGA_RESUME',
+    AJUDA_PEDIDO: 'PEGAVAGA_AJUDA_PEDIDO',
+    AJUDA_RESPOSTA: 'PEGAVAGA_AJUDA_RESPOSTA',
+    AJUDA_FECHAR: 'PEGAVAGA_AJUDA_FECHAR',
   };
 
   const DEFAULT_APPLY = (SHARED.DEFAULT_SETTINGS && SHARED.DEFAULT_SETTINGS.apply) || {
@@ -120,6 +123,14 @@
     applyKindWaitMs: 3000, // tempo máximo esperando o botão revelar o tipo (ícone/rótulo)
     applyKindPollMs: 200, // intervalo de releitura do botão de candidatura
     resumeTimerCapMs: 1800000, // teto do timer local de retomada (30 min)
+
+    /* (TEMPORÁRIO) Pedido de ajuda quando o formulário trava num campo que a
+     * extensão não sabe responder ou o envio demora a confirmar. Sai quando os
+     * campos personalizados forem tratados de verdade. */
+    ajudaEsperaMs: 300000, // quanto esperamos a sua resposta no aviso (5 min)
+    ajudaPollMs: 500, // rede de segurança da espera (a resposta chega por mensagem)
+    ajudaManualMs: 600000, // quanto esperamos você preencher à mão (10 min)
+    ajudaIntervaloMs: 60000, // no máximo um aviso por minuto (evita enxurrada)
 
     /* Ritmo humano / furtividade */
     humanRatio: 0.3, // variação padrão aplicada aos intervalos
@@ -244,6 +255,18 @@
       'button[aria-label="Concluir candidatura"]',
       'button[aria-label="Done"]',
     ],
+    /* (TEMPORÁRIO) Sinais de que o LinkedIn **recusou** um campo do formulário
+     * (campo personalizado, formato fora do esperado, obrigatório em branco). Só
+     * o pedido de ajuda usa isto — sai junto com ele. */
+    invalid: [
+      '[aria-invalid="true"]',
+      '.artdeco-inline-feedback--error',
+      '.artdeco-text-input--error',
+      '.fb-dash-form-element--error',
+      '[data-test-form-element-error]',
+    ],
+    // Mensagem de erro escrita na própria tela (é o que explica o "invalid").
+    invalidText: ['.artdeco-inline-feedback__message', '[role="alert"]'],
   };
 
   /* ------------------------------------------------------------------------ */
@@ -273,6 +296,12 @@
     dismissing: false, // fechando o pós-candidatura (aí todo dialog é popup)
     interruptBusy: false, // já estamos fechando um popup que entrou na tela
     interruptTimer: null, // checagem de popup agendada pelas mutações
+    /* (TEMPORÁRIO) Pedido de ajuda em andamento: { id, acao, avisoId }. Enquanto
+     * existe, a automação está parada esperando a sua decisão. Sai junto com o
+     * pedido de ajuda. */
+    ajuda: null,
+    ajudaTardia: null, // resposta que chegou antes de a espera começar
+    ultimaAjuda: 0, // instante do último aviso (contém a enxurrada de avisos)
   };
 
   /* ------------------------------------------------------------------------ */
@@ -677,6 +706,11 @@
   /** Configuração atual do storage (com padrões aplicados). */
   async function getSettings() {
     try {
+      // O perfil concedido pelo servidor vale aqui também: a página acorda do
+      // zero e normaliza as settings de novo, então reaplicamos o cache (local,
+      // sem rede) antes de ler.
+      if (typeof SHARED.aplicarPerfilSalvo === 'function') await SHARED.aplicarPerfilSalvo();
+
       const data = await chrome.storage.local.get(STORAGE_SETTINGS_KEY);
       return parseSettings(data[STORAGE_SETTINGS_KEY]);
     } catch (error) {
@@ -1540,6 +1574,167 @@
     return labels;
   }
 
+  /* ---- (TEMPORÁRIO) Pedido de ajuda ao usuário ---------------------------- */
+  //
+  // Algumas vagas param num campo personalizado que não sabemos responder — ou
+  // demoram para confirmar o envio. Nesses casos avisamos na área de trabalho e
+  // perguntamos o que fazer (ver `shared.js` e `background.js`). Tudo desta seção
+  // sai quando os campos personalizados forem tratados de verdade.
+
+  /**
+   * Campos que o LinkedIn marcou como inválidos dentro do formulário: é o sinal
+   * de que ele recusou o que respondemos (campo personalizado, formato fora do
+   * esperado, obrigatório em branco). Devolve os rótulos legíveis (até 3).
+   */
+  function invalidFields(modal) {
+    if (!modal) return [];
+
+    const labels = [];
+    const seen = new Set();
+    const guarda = (texto) => {
+      const limpo = clean(texto).slice(0, 60);
+      if (limpo && !seen.has(limpo) && labels.length < 3) {
+        seen.add(limpo);
+        labels.push(limpo);
+      }
+    };
+
+    try {
+      for (const campo of queryAllUnique(APPLY_SEL.invalid, modal)) {
+        guarda(fieldLabel(campo) || campo.textContent);
+      }
+
+      for (const aviso of queryAllUnique(APPLY_SEL.invalidText, modal)) {
+        const texto = clean(aviso.textContent);
+        if (texto && texto.length <= 80) guarda(texto);
+      }
+    } catch (error) {
+      return labels;
+    }
+
+    return labels;
+  }
+
+  /** Dados da vaga que o aviso mostra (título, empresa e o que travou). */
+  function ajudaContexto(id, motivo, problema) {
+    const job = (id && state.jobs[id]) || {};
+
+    return {
+      motivo: motivo === 'demora' ? 'demora' : 'campos',
+      titulo: String(job.title || '').slice(0, 80),
+      empresa: String(job.company || '').slice(0, 60),
+      problema: String(problema || '').slice(0, 120),
+    };
+  }
+
+  /** Pede ao service worker para mostrar o aviso. `{ ok, id }` ('' = não deu). */
+  function avisarNoSistema(dados) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(Object.assign({ type: MSG.AJUDA_PEDIDO }, dados), (resposta) => {
+          resolve(resposta && resposta.ok ? resposta : null);
+        });
+      } catch (error) {
+        resolve(null);
+      }
+    });
+  }
+
+  /** Some com o aviso da área de trabalho (a decisão já foi tomada). */
+  function fecharAviso(avisoId) {
+    try {
+      chrome.runtime.sendMessage(
+        { type: MSG.AJUDA_FECHAR, avisoId: avisoId },
+        () => void chrome.runtime.lastError
+      );
+    } catch (error) {
+      /* sem aviso aberto: nada a fazer */
+    }
+  }
+
+  /**
+   * Avisa na área de trabalho e espera a sua decisão.
+   *
+   * Devolve `'manual'` (você vai preencher à mão: a automação para e respeita),
+   * `'pular'` (a vaga é descartada e a varredura segue para a próxima) ou `''`
+   * (ninguém respondeu a tempo — quem chamou decide o que fazer).
+   */
+  async function pedirAjuda(dados) {
+    if (state.ajuda) return ''; // já há um aviso na tela: não empilha
+    if (Date.now() - state.ultimaAjuda < CONFIG.ajudaIntervaloMs) return '';
+
+    const pedido = {
+      id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      acao: '',
+      avisoId: '',
+    };
+
+    const aviso = await avisarNoSistema(Object.assign({ pedidoId: pedido.id }, dados));
+
+    if (!aviso) return ''; // sem aviso na tela não faz sentido esperar
+    pedido.avisoId = aviso.id;
+
+    state.ajuda = pedido;
+    state.ultimaAjuda = Date.now();
+
+    // O clique é humano, mas a resposta pode chegar antes de a espera começar.
+    if (state.ajudaTardia && state.ajudaTardia.id === pedido.id) {
+      pedido.acao = state.ajudaTardia.acao;
+      state.ajudaTardia = null;
+    }
+
+    try {
+      // O "Parar Varredura" vale na hora: não ficamos presos esperando resposta.
+      await waitUntil(() => pedido.acao || state.abort, CONFIG.ajudaEsperaMs, CONFIG.ajudaPollMs);
+    } finally {
+      state.ajuda = null;
+      fecharAviso(pedido.avisoId);
+    }
+
+    return pedido.acao || '';
+  }
+
+  /**
+   * Você escolheu preencher à mão: a automação não toca mais na página e espera o
+   * formulário sair da tela (você enviou/fechou) ou o prazo acabar. Devolve `true`
+   * quando o formulário saiu.
+   */
+  async function esperarPreenchimentoManual(modal) {
+    const saiu = await waitUntil(
+      // O "Parar Varredura" também encerra esta espera (o formulário fica com você).
+      () => !document.contains(modal) || !isVisible(modal) || looksSubmitted(modal) || state.abort,
+      CONFIG.ajudaManualMs,
+      CONFIG.ajudaPollMs
+    );
+
+    // O modal saiu sozinho (você enviou/fechou): limpamos o que veio depois. Se a
+    // espera terminou por tempo/Parar, o modal pode estar aí — e ele é seu.
+    if (saiu && (!document.contains(modal) || looksSubmitted(modal))) {
+      await dismissAfterApply(modal);
+    }
+
+    return Boolean(saiu);
+  }
+
+  /**
+   * Tenta resolver com você uma vaga que travou num campo ou não confirmou o
+   * envio. Devolve o desfecho a usar (`manual`/`pulada`), ou `null` quando não
+   * houve aviso — aí vale o desfecho de sempre.
+   */
+  async function resolverComAjuda(modal, dados) {
+    const acao = await pedirAjuda(dados);
+    if (!acao) return null;
+
+    if (acao === 'manual') {
+      await esperarPreenchimentoManual(modal);
+      return { status: 'manual' };
+    }
+
+    // Você mandou pular: a vaga é descartada e não volta (sem gastar cota).
+    await closeModal(modal, true);
+    return { status: 'pulada' };
+  }
+
   /* ---- Perguntas obrigatórias: responder sozinho -------------------------- */
 
   /** Preferências de resposta lidas da configuração (ver shared.js). */
@@ -1840,7 +2035,7 @@
    * internet lenta), esperamos a etapa carregar de verdade, fechamos os popups
    * que o LinkedIn joga por cima e respondemos as perguntas obrigatórias.
    */
-  async function applyToJob() {
+  async function applyToJob(jobId) {
     // O guard de popup precisa saber qual dialog é o formulário — e sair de
     // serviço no fim, mesmo se o fluxo estourar no meio.
     clearInterruptTimer(); // nada de guard atrasado de uma vaga anterior
@@ -1848,7 +2043,7 @@
     state.dismissing = false;
 
     try {
-      return await runApplyFlow();
+      return await runApplyFlow(jobId);
     } finally {
       state.keepDialog = null;
       state.dismissing = false;
@@ -1856,7 +2051,7 @@
     }
   }
 
-  async function runApplyFlow() {
+  async function runApplyFlow(jobId) {
     // Antes de qualquer coisa: será que a página está avisando de limite?
     const blockedBefore = detectRateLimit();
     if (blockedBefore) return { status: 'bloqueio', error: blockedBefore };
@@ -1975,7 +2170,18 @@
         }
 
         if (!action) {
-          const missing = describeBlocker(modal);
+          const missing = describeBlocker(modal).concat(invalidFields(modal));
+
+          // (TEMPORÁRIO) A etapa não oferece botão nenhum: normalmente é um campo
+          // que não sabemos responder (ou um que o LinkedIn recusou). Antes de
+          // descartar, perguntamos se você quer assumir esta vaga à mão.
+          const ajuda = await resolverComAjuda(
+            modal,
+            ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+          );
+
+          if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+
           await closeModal(modal, true);
           return { status: 'travada', missing, filled, steps };
         }
@@ -1990,13 +2196,29 @@
       if (action.kind === 'submit') {
         // É o envio: esperamos a confirmação do LinkedIn aparecer (mesmo devagar).
         const sent = await waitForSubmit(modal, CONFIG.applySubmitWaitMs);
+
+        if (sent) {
+          await dismissAfterApply(modal);
+          return { status: 'enviada', filled, steps };
+        }
+
+        // (TEMPORÁRIO) Não confirmou dentro do tempo — e o LinkedIn pode ter
+        // recusado um campo personalizado. Antes de descartar, perguntamos se você
+        // quer preencher esta vaga à mão (ou pular para a próxima).
+        const invalidos = invalidFields(modal);
+        const missing = describeBlocker(modal).concat(invalidos);
+        const ajuda = await resolverComAjuda(
+          modal,
+          ajudaContexto(jobId, invalidos.length ? 'campos' : 'demora', missing.slice(0, 3).join(', '))
+        );
+
+        if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+
         await dismissAfterApply(modal);
 
-        if (sent) return { status: 'enviada', filled, steps };
-
-        // Não confirmou dentro do tempo: fica para a próxima passada, sem contar
-        // como candidatura enviada.
-        return { status: 'incompleta', missing: describeBlocker(modal), filled, steps };
+        // Sem aviso: fica para a próxima passada, sem contar como candidatura
+        // enviada.
+        return { status: 'incompleta', missing, filled, steps };
       }
 
       // O clique não mexeu na tela? Damos mais uma chance antes de desistir —
@@ -2005,7 +2227,19 @@
         stalled += 1;
 
         if (stalled >= 2) {
-          const missing = describeBlocker(modal);
+          const invalidos = invalidFields(modal);
+          const missing = describeBlocker(modal).concat(invalidos);
+
+          // (TEMPORÁRIO) O clique não mexeu na tela: pode ser um campo que o
+          // LinkedIn recusou. Antes de desistir, perguntamos se você quer assumir
+          // esta vaga à mão.
+          const ajuda = await resolverComAjuda(
+            modal,
+            ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+          );
+
+          if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+
           await closeModal(modal, true);
           return { status: 'incompleta', missing, filled, steps };
         }
@@ -2122,6 +2356,10 @@
     } else if (result.status === 'externa') {
       // Vaga fora do LinkedIn: não é para nós nem vale gastar outra tentativa —
       // ela nunca mais é visitada (e não consome cota nenhuma).
+      patch.applyAttempts = CONFIG.applyMaxAttempts;
+    } else if (result.status === 'manual' || result.status === 'pulada') {
+      // (TEMPORÁRIO) Vaga que você assumiu (preencher à mão) ou mandou pular: o
+      // PegaVaga sai do caminho e nunca mais mexe nela. Sai com o pedido de ajuda.
       patch.applyAttempts = CONFIG.applyMaxAttempts;
     }
 
@@ -2509,7 +2747,7 @@
       return;
     }
 
-    const result = await applyToJob();
+    const result = await applyToJob(id);
     await recordApplyResult(id, result);
 
     if (result.status === 'bloqueio') {
@@ -2719,6 +2957,22 @@
         broadcastProgress();
         sendResponse({ ok: true });
         break;
+      // (TEMPORÁRIO) A sua decisão no aviso da área de trabalho chegou: guardamos
+      // no pedido que está esperando (o id evita que uma resposta velha, de outro
+      // pedido, acorde a espera errada).
+      case MSG.AJUDA_RESPOSTA: {
+        const acao = message.acao === 'pular' ? 'pular' : 'manual';
+
+        if (state.ajuda && state.ajuda.id === message.pedidoId) {
+          state.ajuda.acao = acao;
+        } else {
+          state.ajudaTardia = { id: message.pedidoId, acao: acao };
+        }
+
+        sendResponse({ ok: true });
+        break;
+      }
+
       default:
         break;
     }

@@ -19,8 +19,39 @@ for (const arquivo of ['edicoes.js', 'shared.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(raiz, arquivo), 'utf8'), { filename: arquivo });
 }
 
+/* Este teste é sobre perfis, não sobre rede: um `fetch` que sempre falha deixa o
+ * caminho da sessão determinístico (é o mesmo que acontece no navegador offline)
+ * — e impede que o teste fale, sem querer, com a API que estiver rodando. */
+globalThis.fetch = () => Promise.reject(new Error('sem rede no teste'));
+
 const S = globalThis.PegaVagaShared;
 const E = globalThis.PegaVagaEdicoes;
+
+/* O perfil que o servidor concede para uma assinatura ativa — o mesmo formato do
+ * `/plano`. É o ÚNICO caminho para ligar o premium aqui, igual ao navegador:
+ * não existe mais `E.definir('premium')`. */
+const PERFIL_SERVIDOR_PREMIUM = {
+  rotulo: 'Premium',
+  features: {
+    autoApply: true,
+    formFill: true,
+    scheduler: true,
+    export: true,
+    furtividadeConfig: true,
+    cotasAvancadas: true,
+    scanConfig: true,
+    painelAdmin: false,
+  },
+  limites: {
+    maxTermos: 40,
+    cotasEditaveis: ['term', 'hour', 'day24', 'day'],
+    perTermFixo: 0,
+    perHourFixo: 0,
+    tetoDiarioFixo: 0,
+    scanPerTermFixo: 0,
+    per24h: 25,
+  },
+};
 
 if (!S || !E) {
   console.log('FALHA: os modulos nao carregaram (shared/edicoes).');
@@ -90,8 +121,8 @@ ok('linha de cotas sem 24 h', !linha.includes('24 h'), linha);
 ok('linha de cotas com hora e termo', linha.includes('na hora') && linha.includes('neste termo'), linha);
 console.log('  -> ' + linha);
 
-console.log('== PREMIUM ==');
-E.definir('premium');
+console.log('== PREMIUM (concedido pelo servidor) ==');
+E.aplicarDoServidor(PERFIL_SERVIDOR_PREMIUM);
 ok('temFeature(export) = true', S.temFeature('export') === true);
 ok('rotulo do premium = Premium', E.atual().rotulo === 'Premium', E.atual().rotulo);
 
@@ -113,7 +144,7 @@ ok('premium mostra 24 h', qp.includes('24 h'), qp);
 console.log('  -> ' + qp);
 
 console.log('== SERVIDOR (conta + assinatura: a API liga/desliga) ==');
-E.definir('free');
+E.aplicarDoServidor(null);
 
 const lib = E.aplicarDoServidor({
   rotulo: 'Premium',
@@ -155,7 +186,79 @@ E.aplicarDoServidor(null);
 ok('servidor->null volta pro free', E.chaveAtiva() === 'free', E.chaveAtiva());
 ok('servidor->null: export bloqueado', S.temFeature('export') === false);
 
-E.definir('free');
+console.log('== A EDICAO NAO SE DECIDE NO CLIENTE ==');
+ok('edicoes.js nao expoe mais definir()', typeof E.definir === 'undefined');
+ok(
+  'shared.js nao expoe atalho de edicao',
+  typeof S.salvarEdicao === 'undefined' && typeof S.aplicarModoEdicao === 'undefined'
+);
+ok(
+  'shared.js nao expoe o painel de teste',
+  typeof S.lerPainelDev === 'undefined' && typeof S.salvarPainelDev === 'undefined'
+);
+ok(
+  'sessao e sincronizacao existem no lugar',
+  typeof S.sincronizarPlano === 'function' && typeof S.aplicarPerfilSalvo === 'function'
+);
 
-console.log(falhas ? '\n' + falhas + '/' + total + ' FALHARAM' : '\nTodos os ' + total + ' testes passaram.');
-process.exit(falhas ? 1 : 0);
+console.log('== O PERFIL SEGUE O PAYLOAD DO SERVIDOR ==');
+E.aplicarDoServidor(PERFIL_SERVIDOR_PREMIUM);
+ok('premium do payload: 5 termos passam', S.parseSettings({ terms: 'a,b,c,d,e' }).terms.length === 5);
+ok('premium do payload: 24 h de volta', S.parseSettings(null).apply.per24h === 25);
+ok(
+  'premium do payload: a linha de cotas mostra 24 h',
+  S.describeQuota(S.computeQuota(S.parseSettings(null), [], Date.now(), 0)).includes('24 h')
+);
+
+E.aplicarDoServidor({ features: { export: 'sim' }, limites: { maxTermos: 'x' } });
+ok('payload com valor errado cai no padrao do premium', S.temFeature('export') === true);
+ok('payload com limite errado cai no padrao (40)', E.atual().limites.maxTermos === 40, String(E.atual().limites.maxTermos));
+
+E.aplicarDoServidor(null);
+ok('servidor->null: ninguem exporta', S.temFeature('export') === false);
+ok('servidor->null: termos cortados em 2', S.parseSettings({ terms: 'a,b,c' }).terms.length === 2);
+ok('servidor->null: cotas fixas de volta', S.parseSettings(null).apply.perHour === 3);
+
+// Sem chrome.storage (Node puro) as funcoes de sessao degradam sem estourar:
+// e exatamente o que roda no service worker quando o storage falha.
+E.aplicarDoServidor(PERFIL_SERVIDOR_PREMIUM);
+
+S.aplicarPerfilSalvo()
+  .then((perfil) => {
+    ok(
+      'sem chrome: aplicarPerfilSalvo volta ao free',
+      Boolean(perfil) && perfil.chave === 'free',
+      String(perfil && perfil.chave)
+    );
+    ok('sem chrome: perfil ativo = free', S.perfilEdicao().chave === 'free', S.perfilEdicao().chave);
+    return S.lerSessao();
+  })
+  .then((sessao) => {
+    ok('sem chrome: nenhuma sessao guardada', sessao === null, String(sessao));
+    return S.sincronizarPlano();
+  })
+  .then((resultado) => {
+    ok('sem sessao: sincronizarPlano nao chama a rede', resultado.ok === true && resultado.perfil === null);
+    return S.entrar('a@b.co', 'senha-boa-1');
+  })
+  .then((resultado) => {
+    ok(
+      'sem fetch: entrar devolve erro tratado',
+      resultado.ok === false && resultado.erro === 'rede',
+      String(resultado.erro)
+    );
+    return S.sair();
+  })
+  .then((resultado) => {
+    ok('sair devolve ok', resultado.ok === true);
+    finalizar();
+  })
+  .catch((erro) => {
+    ok('caminho de sessao assincrono', false, erro && erro.message);
+    finalizar();
+  });
+
+function finalizar() {
+  console.log(falhas ? '\n' + falhas + '/' + total + ' FALHARAM' : '\nTodos os ' + total + ' testes passaram.');
+  process.exit(falhas ? 1 : 0);
+}

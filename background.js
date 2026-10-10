@@ -59,6 +59,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * mantemos o alarme (e a luz do ícone) alinhados com o que precisa acontecer. */
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+
+  // Sessão/perfil mudaram (login, logout, plano novo): reaplica o perfil aqui e
+  // realinha o que o agendador pode fazer (o free não tem agendador).
+  if (changes[STORAGE.perfil] || changes[STORAGE.sessao]) {
+    SHARED.aplicarPerfilSalvo()
+      .then(() => Promise.all([syncAlarm(), refreshStatus()]))
+      .catch(() => {});
+    return;
+  }
+
   if (changes[STORAGE.settings] || changes[STORAGE.run]) syncAlarm();
   if (changes[STORAGE.settings] || changes[STORAGE.run] || changes[STORAGE.guard]) {
     refreshStatus();
@@ -67,9 +77,128 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 /* O content script avisa o andamento mesmo com o pop-up fechado: assim a luz do
  * ícone acompanha a varredura em tempo real. */
-chrome.runtime.onMessage.addListener((message) => {
-  if (message && message.type === MSG.PROGRESS) refreshStatus(message);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message) return false;
+
+  if (message.type === MSG.PROGRESS) {
+    refreshStatus(message);
+    return false;
+  }
+
+  // (TEMPORÁRIO) Pedido de ajuda do content script: mostramos o aviso na área de
+  // trabalho e devolvemos se ele foi criado — o script só espera quando foi.
+  if (message.type === MSG.AJUDA_PEDIDO) {
+    mostrarAjuda(message, sender)
+      .then(sendResponse)
+      .catch(() => sendResponse({ ok: false, motivo: 'erro' }));
+    return true; // a resposta é assíncrona
+  }
+
+  // (TEMPORÁRIO) A espera acabou (decisão tomada ou prazo estourado): some com o
+  // aviso, para ele não ficar na tela pedindo algo que não existe mais.
+  if (message.type === MSG.AJUDA_FECHAR) {
+    limparAviso(message.avisoId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  return false;
 });
+
+/* -------------------------------------------------------------------------- */
+/* (TEMPORÁRIO) Pedido de ajuda ao usuário                                     */
+/* -------------------------------------------------------------------------- */
+//
+// Quando a Candidatura Simplificada trava num campo que a extensão ainda não sabe
+// responder — ou o envio demora a confirmar —, o content script pede ajuda e
+// espera. Mostramos um aviso na área de trabalho com dois botões:
+//
+//   * "Vou preencher à mão" → a automação para e espera você terminar;
+//   * "Pular esta vaga"     → a vaga é descartada e a varredura segue adiante.
+//
+// O id do aviso carrega o `tabId` (ver `SHARED.ajudaId`): o clique pode acordar o
+// worker do zero, e é por ele que a decisão acha a aba que está esperando.
+// Sai inteiro quando os campos personalizados forem tratados de verdade.
+
+/** Cria a notificação. Devolve o id criado, ou '' quando não deu. */
+function criarAviso(id, opcoes) {
+  return new Promise((resolve) => {
+    try {
+      chrome.notifications.create(id, opcoes, (criado) => {
+        resolve(!chrome.runtime.lastError ? criado || id : '');
+      });
+    } catch (error) {
+      resolve('');
+    }
+  });
+}
+
+/** Monta e mostra o aviso do pedido de ajuda. */
+async function mostrarAjuda(dados, sender) {
+  if (!chrome.notifications || typeof chrome.notifications.create !== 'function') {
+    return { ok: false, motivo: 'sem_notificacao' };
+  }
+
+  const pedidoId = String((dados && dados.pedidoId) || '');
+  if (!pedidoId) return { ok: false, motivo: 'pedido_sem_id' };
+
+  const tabId = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
+  if (tabId == null) return { ok: false, motivo: 'sem_aba' }; // sem aba não há para quem responder
+  const id = SHARED.ajudaId(tabId, pedidoId);
+  const texto = SHARED.textoDaAjuda(dados);
+
+  const criado = await criarAviso(id, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/pg-128.png'),
+    title: texto.title,
+    message: texto.message,
+    buttons: (SHARED.AJUDA_BOTOES || []).map((title) => ({ title })),
+    requireInteraction: true, // o aviso fica na tela até você escolher
+    priority: 2,
+  });
+
+  return criado ? { ok: true, id: criado } : { ok: false, motivo: 'falha_ao_avisar' };
+}
+
+/** Some com o aviso (sem erro se ele já saiu). */
+function limparAviso(avisoId) {
+  if (!avisoId || !chrome.notifications || typeof chrome.notifications.clear !== 'function') {
+    return;
+  }
+
+  try {
+    const resultado = chrome.notifications.clear(avisoId);
+    if (resultado && typeof resultado.catch === 'function') resultado.catch(() => {});
+  } catch (error) {
+    /* o aviso já saiu da tela */
+  }
+}
+
+/**
+ * O usuário clicou num botão do aviso: leva a decisão de volta para a aba que
+ * está esperando e tira o aviso da tela. Fechar o aviso sem clicar não decide
+ * nada — a espera do content script tem prazo e segue o caminho de sempre.
+ */
+function responderAjuda(avisoId, indice) {
+  const alvo = SHARED.lerAjudaId(avisoId);
+  const acao = SHARED.acaoDaAjuda(indice);
+
+  limparAviso(avisoId);
+
+  if (!alvo || !acao) return Promise.resolve(false);
+
+  return sendToTab(alvo.tabId, {
+    type: MSG.AJUDA_RESPOSTA,
+    pedidoId: alvo.pedidoId,
+    acao: acao,
+  });
+}
+
+if (chrome.notifications && chrome.notifications.onButtonClicked) {
+  chrome.notifications.onButtonClicked.addListener((avisoId, indice) => {
+    responderAjuda(avisoId, indice);
+  });
+}
 
 /* Ao subir um service worker novo, garante o alarme e a luz certos. */
 syncAlarm();
@@ -80,6 +209,11 @@ refreshStatus();
 /* -------------------------------------------------------------------------- */
 
 async function readState() {
+  // O perfil concedido pelo servidor vale para o worker também: o service worker
+  // acorda do zero, então reaplicamos o cache do /plano antes de normalizar
+  // settings (sem rede — o cache é local, e sem ele o perfil é o free).
+  if (typeof SHARED.aplicarPerfilSalvo === 'function') await SHARED.aplicarPerfilSalvo();
+
   const data = await chrome.storage.local.get([
     STORAGE.settings,
     STORAGE.run,
