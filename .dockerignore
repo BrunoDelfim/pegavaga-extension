@@ -1,0 +1,15 @@
+# O que não entra na imagem.
+#
+# A imagem é ferramenta de BUILD: o código da extensão chega por bind mount na
+# hora de rodar, então só o baixador do toolchain precisa estar nela.
+.git/
+.gitignore
+*.md
+docs/
+icons/
+tests/
+
+# O toolchain é baixado DENTRO da imagem (é o ponto do Dockerfile): não faz
+# sentido mandar o da máquina de fora no contexto do build.
+tools/typescript/
+tools/node_modules/

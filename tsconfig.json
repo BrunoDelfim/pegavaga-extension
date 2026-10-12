@@ -1,0 +1,70 @@
+/* =============================================================================
+ * PegaVaga - tsconfig.json
+ *
+ * O TypeScript é só ferramenta de BUILD: escreve-se em `src/*.ts` e sai o JS da
+ * raiz com o MESMO nome (é esse JS que o Chrome carrega e que os testes de fumaça
+ * rodam). Não há bundler, não há npm, não há passo de módulos — a extensão
+ * continua sendo um punhado de scripts clássicos, como o Manifest V3 pede.
+ *
+ *   node tools/typescript/bin/tsc -p .     # só compila
+ *   ./pgv.sh build                         # baixa o toolchain (se faltar) + compila + marca
+ *   ./pgv.sh check                         # só confere os tipos, sem escrever nada
+ * ===========================================================================*/
+{
+  "compilerOptions": {
+    /* O mesmo ambiente que a extensão encontra: um Chrome atual. `ES2022` é o que
+     * o V8 do Chrome de hoje aceita sem transpilação — o alvo é o navegador, não
+     * um Node antigo (o service worker roda no mesmo motor). */
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ES2022",
+
+    /* `auto`: cada arquivo se decide sozinho. Sem `import`/`export`, o arquivo é
+     * um script clássico (global) — que é exatamente o que popup.html, o content
+     * script e o `importScripts` do service worker precisam. Nada de virar módulo
+     * por acidente: viraria `export {}` no JS gerado e o `globalThis` sumiria. */
+    "moduleDetection": "auto",
+
+    /* Rigor total desde o primeiro arquivo: é o motivo de existir a migração.
+     * `strict` já liga noImplicitAny, strictNullChecks, alwaysStrict etc. — em
+     * arquivo sem tipagem nenhuma ele é ruidoso, por isso a conversão é um
+     * arquivo por vez (ver docs/migracao-typescript.md). */
+    "strict": true,
+
+    /* Os comentários do fonte são a documentação do projeto e vale a pena
+     * mantê-los no JS publicado (é ele que se lê no DevTools e no repositório). */
+    "removeComments": false,
+
+    /* Tipo errado não gera artefato: sem isto, um erro de tipo deixaria o JS
+     * gerado para trás — e o `manifest.json` carregaria o arquivo velho. */
+    "noEmitOnError": true,
+
+    /* `src/` é a fonte, a raiz é a saída: `src/edicoes.ts` → `edicoes.js`, no
+     * mesmo lugar em que o manifest e o popup.html já apontam. Os `.d.ts` de
+     * `src/tipos/` não geram arquivo nenhum. */
+    "rootDir": "src",
+    "outDir": ".",
+
+    /* Sem sourcemaps (de propósito): o caminho de volta seria `../src/x.ts`, que
+     * sai da raiz do pacote — o Chrome não serve arquivo fora dela, então o mapa
+     * não funcionaria no DevTools. O JS gerado mantém os nomes e os comentários,
+     * e a leitura dele é praticamente a do fonte (ver D3 no documento). */
+    "sourceMap": false,
+
+    /* Os tipos do Chrome vêm do toolchain baixado em `tools/` (sem npm): é o
+     * `typeRoots` que faz o tsc achá-los. Trocar de motor um dia (Firefox/WebExt)
+     * é trocar esta lista. */
+    "typeRoots": ["./tools/node_modules/@types"],
+    "types": ["chrome"],
+
+    /* Os `.d.ts` de terceiros não são nosso problema — e o `@types/chrome` traz
+     * dependências antigas (`@types/filesystem`, `@types/har-format`) que não
+     * sobreviveriam a um `strict` sobre elas. */
+    "skipLibCheck": true
+  },
+
+  /* Só os fontes: o JS da raiz é SAÍDA (não voltar a compilá-lo criaria um ciclo)
+   * e `tools/` é o compilador baixado. */
+  "include": ["src/**/*.ts"],
+  "exclude": ["tools", "tests", "docs"]
+}

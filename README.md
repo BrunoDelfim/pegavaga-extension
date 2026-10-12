@@ -21,7 +21,10 @@ estratégia de produto, não código de cliente.
 ```
 extensao/
 ├── manifest.json   # Manifest V3: permissões, service worker e content script
-├── edicoes.js      # Perfis de edição (free/premium): a política de cada plano
+├── src/            # A FONTE do código (TypeScript) — é aqui que se edita
+│   ├── edicoes.ts  # Perfis de edição (free/premium): a política de cada plano
+│   └── tipos/      # Tipos compartilhados entre os arquivos (globais.d.ts)
+├── edicoes.js      # GERADO de src/edicoes.ts — não edite este arquivo à mão
 ├── shared.js       # Constantes e utilitários puros (cotas, janelas, ritmo e motivos)
 ├── background.js   # Service worker: agendador (chrome.alarms)
 ├── popup.html      # Interface (configuração, cotas, agendador + contador)
@@ -33,6 +36,15 @@ extensao/
 │   ├── smoke-conta.js          # o pop-up num DOM falso: conta, plano e painel do admin
 │   ├── smoke-popups.js         # o guard de popup: quando ele age e o que protege
 │   └── smoke-ajuda.js          # (temporário) o pedido de ajuda ao usuário
+├── tools/          # O build — Node puro, SEM npm
+│   ├── baixar-tipos.js         # baixa o tsc e os tipos do Chrome (só Node)
+│   ├── build.sh                # build: baixar + compilar + marcar (./pgv.sh build)
+│   ├── cabecalho.js            # marca o JS gerado com "não edite à mão"
+│   └── testar.sh               # roda os cinco smokes (./pgv.sh test)
+├── tsconfig.json   # Configuração do TypeScript (src/ → a raiz)
+├── Dockerfile      # O build num container, para máquina sem Node
+├── docker-compose.yml
+├── docker/         # Peças dos containers (ponto de entrada da imagem)
 ├── docs/           # Notas de trabalho (o desenho acordado antes do código)
 │   ├── candidatura-externa.md  # vaga no site da empresa: abrir, preencher e revisar
 │   └── migracao-typescript.md  # trocar o JS por TS (e o build sem npm)
@@ -50,6 +62,48 @@ vem — a **candidatura em site de terceiro** (a vaga cujo botão sai do LinkedI
 **migração de JavaScript para TypeScript** — no mesmo espírito do `docs/` da API.
 Servem para a implementação nascer cortada na fronteira certa, e não como
 documentação do que já roda.
+
+### Build (TypeScript, sem npm)
+
+O código está migrando de JavaScript para **TypeScript**, um arquivo por vez (o
+plano está em `docs/migracao-typescript.md`). Uma regra não muda: **quem baixa o
+repositório e carrega a extensão no Chrome não precisa compilar nada** — o `.js`
+da raiz é versionado, e é ele que o `manifest.json` carrega.
+
+Quem mexe no código escreve em `src/*.ts` e roda o build, que reescreve o `.js` da
+raiz e o marca com o aviso de "não edite à mão":
+
+```sh
+./pgv.sh build                  # ou, dentro de extensao/: ./tools/build.sh
+./pgv.sh check                  # confere os tipos, sem escrever arquivo
+./pgv.sh test                   # os cinco smokes (ou: ./tools/testar.sh)
+```
+
+**Não existe `npm install` em lugar nenhum** — nem `package.json`. O compilador
+(TypeScript 5.9.3) e os tipos do Chrome (`@types/chrome`) são baixados pelo próprio
+Node, em versão fixa, para `tools/` (que é ignorado pelo git):
+
+```sh
+node tools/baixar-tipos.js      # baixa o tsc e os tipos (uma vez; --forcar refaz)
+```
+
+Isso mantém o build **igual em qualquer sistema** (Linux, macOS, Windows — só
+precisa do Node), **offline** depois da primeira vez e **sem depender de registro de
+pacotes**: o tarball é lido à mão, com `https`/`zlib` do Node.
+
+**Sem Node na máquina?** O mesmo build roda num container:
+
+```sh
+cd extensao
+docker compose run --rm extensao ./tools/build.sh     # compila
+docker compose run --rm extensao ./tools/testar.sh    # testa
+```
+
+O `pgv.sh` escolhe sozinho: se não houver `node` no `PATH`, `build`, `check` e
+`test` caem no container (e `PGV_DOCKER=1 ./pgv.sh build` força o container mesmo
+com Node instalado). O toolchain é o mesmo dos dois lados, então o resultado
+também é — conferido com `cmp`: o `.js` gerado no container é byte a byte igual ao
+gerado na máquina, e o arquivo sai com o **seu** usuário (nada de `root` na pasta).
 
 ### Testes
 
@@ -205,6 +259,10 @@ pop-up (junto da edição ativa) e o histórico fica no
 5. Se a extensão já estava instalada nesta pasta, clique em **🔄 Atualizar** em
    `chrome://extensions/` e dê **F5** nas abas do LinkedIn já abertas (o
    `shared.js` e o `background.js` são novos).
+
+> **Não é preciso compilar para instalar.** O `.js` que o Chrome carrega está
+> versionado no repositório; o build (TypeScript) só interessa a quem edita o
+> código em `src/` — veja [Build](#build-typescript-sem-npm).
 
 ## Como usar
 

@@ -19,6 +19,14 @@ desktop.ini
 # --- Dependencias (se um dia entrar tooling no Node) ---
 node_modules/
 
+# --- Toolchain do TypeScript (o que tools/baixar-tipos.js deixa aqui) ---
+# O compilador e os tipos são de terceiros e NÃO entram no repositório: quem
+# clona roda `./pgv.sh build` (ou o docker) e baixa na hora — na versão fixa que
+# está no script, sem npm. (O `tools/node_modules/` já cai no `node_modules/`
+# acima; fica explícito porque é ele que traz os `@types`.)
+tools/typescript/
+tools/node_modules/
+
 # --- Pacotes gerados (ZIP da Web Store / .crx local) ---
 *.zip
 *.crx

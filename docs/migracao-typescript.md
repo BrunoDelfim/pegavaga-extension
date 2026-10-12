@@ -1,8 +1,15 @@
 # PegaVaga — Migração da extensão para TypeScript
 
-> Documento de trabalho: o plano **antes** da troca. Boa parte do que está aqui já
-> foi **executada e verificada** numa pasta de rascunho (`/tmp`) nesta máquina — os
-> pontos verificados estão marcados com ✅. Nada foi migrado no repositório ainda.
+> Documento de trabalho: o plano e o **registro** da troca. Boa parte dele foi
+> executada e verificada numa pasta de rascunho (`/tmp`) antes de entrar no
+> repositório — os pontos verificados estão marcados com ✅.
+>
+> **Estado hoje:** o caminho sem npm (§3, com uma correção importante), o
+> `tsconfig.json` (§6), a ponte entre arquivos sem ESM (§5) e o **passo 1** da ordem
+> (§7 — `edicoes.js`) estão no repositório e verdes: `./pgv.sh build`,
+> `./pgv.sh check` e `./pgv.sh test` (272 testes) passam, e o `.js` gerado é
+> equivalente ao escrito à mão. Os passos **2 a 5 seguem como plano**. Há também o
+> **build em container** (`Dockerfile`, `docker-compose.yml`) para máquina sem Node.
 
 ## 1. Ponto de partida (medido)
 
@@ -58,9 +65,28 @@ node tools/typescript/bin/tsc --version      # ✅ Version 5.9.3
 ```
 
 `@types/chrome` sai do mesmo jeito (`.../registry.npmjs.org/@types/chrome/-/chrome-x.y.z.tgz`).
-Proposta: um `tools/baixar-tipos.sh` (ou `make tipos`) que baixa e extrai os dois em
-`tools/` — que fica no `.gitignore` (o `node_modules/` já está lá, e a seção do
-`.gitignore` já diz "Dependencias (se um dia entrar tooling no Node)").
+
+**O que entrou no repositório (correção do rascunho):** o `curl` e o `tar` acima não
+servem para o objetivo — **não são portáveis** (no Windows não existem com essa
+cara). O que existe é o `tools/baixar-tipos.js`: baixa e extrai com **só o Node**
+(`https` + `zlib` + um leitor de tar de ~40 linhas), resolve as dependências de
+`@types/*` recursivamente (o `@types/chrome` puxa `filesystem` → `filewriter` e
+`har-format`) e fixa as versões **dentro do próprio script** — o "lockfile" é ele.
+Destino: `tools/typescript` e `tools/node_modules/@types` (`--forcar` refaz):
+
+```sh
+node tools/baixar-tipos.js --forcar
+```
+
+Duas coisas que só apareceram na prática (o script já trata as duas):
+
+- O tar de um pacote **não** vem sempre com a pasta `package/` na frente: os
+  `@types` publicados pelo DefinitelyTyped vêm com o nome do pacote (`chrome/…`,
+  `filesystem/…`). O que o script extrai é o **primeiro nível**, seja ele qual for.
+- O que fica no `.gitignore` é só o **resultado** (`tools/typescript/` e
+  `tools/node_modules/`). Os scripts (`tools/*.js`, `tools/*.sh`) **entram** no
+  repositório: são eles que definem o toolchain — sem eles, "build sem npm" não se
+  repete em outra máquina.
 
 Ligado a isso, **o Node 26 roda `.ts` direto** (type stripping, verificado:
 `node arquivo.ts` executa) — dá para apontar um teste para o `.ts` algum dia. Duas
@@ -79,19 +105,29 @@ consequências práticas:
   `src/*.ts` → **JS emitido na raiz do repositório**, com os mesmos nomes
   (`src/shared.ts` → `shared.js`), para o `manifest.json` e o `popup.html` não
   mudarem **nem uma linha**.
-- **D2 — Commitar o JS gerado?** Proposta: **sim**, com um cabeçalho
-  "GERADO de `src/x.ts` — não edite aqui" (a extensão continua instalável
-  diretamente do GitHub, que é o ponto do repositório público). O cabeçalho sai de
-  um `tools/cabecalho.js` (Node puro, pós-build) — o `tsc` não tem banner nativo.
-- **D3 — Sourcemaps?** Sem eles o JS gerado fica igual ao de hoje (diff limpo);
-  com eles o `chrome://extensions` fica depurável no fonte TS. Proposta: gerar
-  (`sourceMap: true`) e **commitar**, já que o repositório é aberto.
+- **D2 — Commitar o JS gerado?** ✅ **Sim**, com um cabeçalho "GERADO de `src/x.ts`
+  — não edite aqui" (a extensão continua instalável direto do GitHub, que é o ponto
+  do repositório público). Está feito: o cabeçalho sai do `tools/cabecalho.js`
+  (Node puro, pós-build) — o `tsc` não tem banner nativo.
+- **D3 — Sourcemaps?** ⏸️ **Adiado, e por um motivo técnico** descoberto ao montar o
+  `tsconfig`: com `rootDir: src` e o JS na raiz, o `.map` sai com
+  `"sources": ["../src/x.ts"]` — e esse `../` **sai da pasta da extensão**, que o
+  Chrome não deixa carregar. O mapa apontaria para o nada no DevTools (e o
+  `//# sourceMappingURL=` ficaria quebrado). Ficou `sourceMap: false`; o JS gerado
+  mantém nomes e comentários, então lê-se quase como o fonte. Se depurar no TS
+  virar necessidade, o caminho é `inlineSources: true` **junto** com
+  `sourceMap: true` (o fonte viaja embutido no `.map`, sem caminho relativo) — em
+  aberto.
 - **D4 — ESM ou globais?** Proposta: **manter os globais + IIFE** (§5). É o que
   preserva `importScripts`, os content scripts e os quatro testes. ESM só se um dia
   entrar bundler — decisão adiada, e não é necessária para tipar.
-- **D5 — Tipo compartilhado entre arquivos.** Um único `.d.ts` ambiente
+- **D5 — Tipo compartilhado entre arquivos.** ✅ Um único `.d.ts` ambiente
   (`src/tipos/globais.d.ts`) declarando os globais **com o tipo vindo do próprio
-  IIFE** (§5) — sem duplicar tipo na mão.
+  IIFE** (§5) — sem duplicar tipo na mão. No `edicoes.ts` isso ficou assim: os
+  tipos do domínio (`FeaturesEdicao`, `LimitesEdicao`, `PerfilEdicao`) são
+  declarados no topo (script sem `import` ⇒ tipo de topo é global, e o
+  `shared.ts` poderá usá-los sem importar nada) e o que sai do arquivo é derivado:
+  `type PegaVagaEdicoesApi = typeof apiEdicoes;`.
 
 ## 5. Como os arquivos conversam (sem ESM) ✅
 
@@ -143,6 +179,16 @@ Dois detalhes que economizam uma hora amanhã:
 
 ## 6. `tsconfig.json` proposto (validado) ✅
 
+> O que está no repositório segue isto, com cinco ajustes que a prática pediu:
+> `sourceMap: false` (ver D3), `removeComments: false` (os comentários são a
+> documentação do projeto, e o JS é o que se lê no DevTools e no repositório),
+> `noEmitOnError: true` (um erro de tipo **não** deixa o `.js` velho no lugar — o
+> que esconderia a falha, já que o `manifest.json` continuaria carregando o
+> arquivo antigo; foi o que salvou o primeiro build), `moduleDetection: "auto"`
+> (sem `import`, o arquivo continua script clássico — e não vira módulo por
+> acidente) e `typeRoots: ["./tools/node_modules/@types"]` (é o que faz o tsc
+> achar o `@types/chrome` baixado, sem `node_modules` na raiz do repositório).
+
 ```json
 {
   "compilerOptions": {
@@ -178,16 +224,19 @@ Armadilhas que já apareceram no rascunho:
 
 ## 7. Ordem da migração (um commit por passo)
 
-| # | Arquivo | Por que nesta ordem | O que protege |
-| - | ------- | ------------------- | ------------- |
-| 1 | `edicoes.js` → `src/edicoes.ts` | o menor (180 linhas) e sem DOM: valida o pipeline inteiro (baixar tipos, build, emit, extensão carregando) com risco mínimo | `tests/smoke-edicoes.js` |
-| 2 | `shared.js` → `src/shared.ts` | o **maior ganho**: é puro, é o que os testes mais exercitam, e é onde os tipos mais valem (`Settings`, `apply.answers`, `APPLY_OUTCOMES`, `APPLY_KINDS`, o motor de espera) | `smoke-espera` + `smoke-edicoes` + `smoke-conta` |
-| 3 | `background.js` → `src/background.ts` | `chrome.*` tipado de verdade (alarms, tabs, windows, notifications) | `smoke-ajuda` |
-| 4 | `popup.js` → `src/popup.ts` | a UI; o DOM falso do `smoke-conta` já cobre o essencial | `smoke-conta` |
-| 5 | `content.js` → `src/content.ts` | por último: 3167 linhas, o mais acoplado ao DOM do LinkedIn (helpers de `query`, espera, fluxo de candidatura) | os quatro + teste manual no LinkedIn |
+| # | Arquivo | Por que nesta ordem | O que protege | Estado |
+| - | ------- | ------------------- | ------------- | ------ |
+| 1 | `edicoes.js` → `src/edicoes.ts` | o menor (180 linhas) e sem DOM: valida o pipeline inteiro (baixar tipos, build, emit, extensão carregando) com risco mínimo | `tests/smoke-edicoes.js` | ✅ **feito** |
+| 2 | `shared.js` → `src/shared.ts` | o **maior ganho**: é puro, é o que os testes mais exercitam, e é onde os tipos mais valem (`Settings`, `apply.answers`, `APPLY_OUTCOMES`, `APPLY_KINDS`, o motor de espera) | `smoke-espera` + `smoke-edicoes` + `smoke-conta` | ⏳ próximo |
+| 3 | `background.js` → `src/background.ts` | `chrome.*` tipado de verdade (alarms, tabs, windows, notifications) | `smoke-ajuda` | ⏳ |
+| 4 | `popup.js` → `src/popup.ts` | a UI; o DOM falso do `smoke-conta` já cobre o essencial | `smoke-conta` | ⏳ |
+| 5 | `content.js` → `src/content.ts` | por último: 3167 linhas, o mais acoplado ao DOM do LinkedIn (helpers de `query`, espera, fluxo de candidatura) | os cinco + teste manual no LinkedIn | ⏳ |
 
-Em cada passo: `tsc` sem erro + os quatro smoke passando + **um teste manual no
-navegador** (recarregar a extensão e fazer uma varredura curta).
+Em cada passo: `tsc` sem erro + os **cinco** smoke passando + **um teste manual no
+navegador** (recarregar a extensão e fazer uma varredura curta). O passo 1 cumpriu
+os três — e, antes do teste manual, o `edicoes.js` gerado foi comparado com o
+escrito à mão no mesmo `vm` dos testes: `PERFIS`, `FURTIVIDADE_SAO` e a superfície
+da API saíram **idênticos**.
 
 ## 8. Riscos e como evitar
 
@@ -195,9 +244,10 @@ navegador** (recarregar a extensão e fazer uma varredura curta).
   arquivo que o Chrome carrega volta a ser um artefato). Mitigação: o cabeçalho
   "GERADO de `src/x.ts` — não edite aqui" em todo arquivo emitido (D2) e o build
   sobrescrevendo a raiz.
-- **`.gitignore`**: hoje ele já ignora `node_modules/`; acrescentar `tools/` (o
-  `typescript` e o `@types/chrome` não entram no git) e **não** ignorar `*.js` na
-  raiz, que passa a ser o artefato versionado.
+- **`.gitignore`**: ✅ feito, com um ajuste ao que estava previsto: o ignorado é o
+  **resultado** (`tools/typescript/` e `tools/node_modules/`), não `tools/` inteiro
+  — os scripts do build são o toolchain e **entram** no git. E **nada** de ignorar
+  `*.js` na raiz: ele passa a ser o artefato versionado.
 - **Diffs maiores**: cada mudança passa a tocar o `.ts` e o `.js` (mais o `.map`,
   se D3 for "commitar"). O cabeçalho resolve a leitura, mas vale dizer no README
   qual dos dois é a fonte.
@@ -213,18 +263,35 @@ navegador** (recarregar a extensão e fazer uma varredura curta).
 ## 9. Comandos do dia a dia (sem npm)
 
 ```sh
-node tools/typescript/bin/tsc -p .             # compila e emite o JS na raiz
-node tools/typescript/bin/tsc -p . --noEmit    # só confere os tipos
-
-node tests/smoke-edicoes.js
-node tests/smoke-espera.js
-node tests/smoke-conta.js
-node tests/smoke-ajuda.js
+./pgv.sh build                  # compila: toolchain (se faltar) + tsc + cabeçalho
+./pgv.sh check                  # só confere os tipos, sem escrever arquivo
+./pgv.sh test                   # os cinco smokes (sem lista fixa: o glob acha)
 ```
 
-Proposta: dar esses alvos ao `pgv.sh` que já vive na raiz do workspace (fora dos
-dois repos): `./pgv.sh build`, `./pgv.sh check`, `./pgv.sh test`. Assim o dia a dia
-não depende de npm nem de decorar caminho de `tools/`.
+Por baixo, esses alvos chamam `extensao/tools/build.sh` e `extensao/tools/testar.sh`
+— o "como compilar" mora **dentro** do repositório (não no script de fora), então
+quem clona só a extensão tem os mesmos comandos:
+
+```sh
+cd extensao
+./tools/build.sh              # compila
+./tools/build.sh --conferir   # confere os tipos
+./tools/testar.sh             # testa
+```
+
+Sem Node na máquina, o mesmo build num container:
+
+```sh
+cd extensao
+docker compose run --rm extensao ./tools/build.sh
+docker compose run --rm extensao ./tools/testar.sh
+PGV_DOCKER=1 ./pgv.sh test    # da pasta de cima: força o container
+```
+
+O `pgv.sh` decide sozinho: sem `node` no `PATH`, `build`/`check`/`test` caem no
+container (e `PGV_DOCKER=1` força o container mesmo com Node instalado). O toolchain
+é o mesmo dos dois lados — versão fixa no `baixar-tipos.js` — e foi conferido com
+`cmp` que o `.js` gerado no container é **byte a byte** igual ao gerado na máquina.
 
 ## 10. Ordem geral (TypeScript × candidatura externa)
 

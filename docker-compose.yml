@@ -1,0 +1,31 @@
+# PegaVaga — build e teste da extensão dentro do Docker.
+#
+#   docker compose run --rm extensao                 # compila (tsc + cabeçalho)
+#   docker compose run --rm extensao ./tools/build.sh
+#   docker compose run --rm extensao ./tools/testar.sh
+#   docker compose run --rm extensao sh              # para mexer à mão
+#
+# Não existe serviço de longa duração de propósito: a extensão não é um serviço —
+# quem a carrega é o navegador. Aqui o container é a ferramenta que compila e
+# testa com o MESMO Node em qualquer máquina (inclusive numa sem Node instalado).
+#
+# Se você tem Node na máquina, dá para fazer tudo sem Docker: `./pgv.sh build` e
+# `./tools/testar.sh` produzem exatamente o mesmo resultado.
+
+services:
+  extensao:
+    build: .
+    working_dir: /extensao
+    # O usuário do container é o SEU: sem isto, o JS gerado na pasta do host
+    # nasceria como root e você precisaria de sudo para editá-lo depois. Se o seu
+    # UID/GID não for 1000:
+    #   PGV_UID=$(id -u) PGV_GID=$(id -g) docker compose run --rm extensao
+    user: "${PGV_UID:-1000}:${PGV_GID:-1000}"
+    volumes:
+      # O repositório inteiro: é o código que se está editando — e é onde o JS
+      # gerado tem de aparecer (o `manifest.json` aponta para ele).
+      - .:/extensao
+    environment:
+      # O usuário do container não existe no /etc/passwd da imagem; o Node usa o
+      # HOME para caches e cai num aviso sem ele. /tmp existe e é de todos.
+      HOME: /tmp

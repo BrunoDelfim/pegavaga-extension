@@ -17,6 +17,21 @@ da build).
 
 ### Adicionado
 
+- **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código
+  está migrando de JavaScript para TypeScript **um arquivo por vez**, começando pelo
+  `edicoes.js` (`src/edicoes.ts` — o menor e sem DOM). O compilador (TypeScript
+  5.9.3) e os tipos do Chrome são baixados **pelo próprio Node**, em versão fixa
+  (`tools/baixar-tipos.js`: `https` + `zlib` + um leitor de tar de ~40 linhas — sem
+  `npm`, sem `package.json`, sem depender de registro de pacotes), e o `.js` gerado
+  continua **versionado** e idêntico em comportamento (conferido: mesmos perfis,
+  mesma superfície de API e os 272 testes passando). Quem instala a extensão **não**
+  precisa compilar nada.
+- **Build e testes no Docker** (`Dockerfile`, `docker-compose.yml`, `docker/`): o
+  mesmo build roda num container (Node 22 + o toolchain embutido na imagem), para
+  máquina sem Node instalado. O container trabalha como o **seu** usuário — nada de
+  arquivo como `root` na pasta do host — e o resultado é o mesmo da máquina de fora
+  (conferido byte a byte).
+
 - **Camada de edições** (`edicoes.js`): perfis `free` e `premium` com as features e
   os limites de cada um. A edição ativa começa na `free` (a mesma build do
   portfólio); desbloquear a premium não muda o código, muda o direito de uso.
@@ -125,6 +140,11 @@ da build).
 
 ### Alterado
 
+- **`pgv.sh` ganhou `build` e `check`** (extensão): compilar e conferir os tipos
+  viraram alvos do dia a dia, e eles caem **sozinhos no container** quando não há
+  `node` no `PATH` (`PGV_DOCKER=1` força o container mesmo com Node instalado). O
+  alvo `test` passou a chamar o script do repositório, em vez de repetir caminhos.
+
 - **Cotas do free fixadas e reduzidas**: os campos "Por termo" e "Por hora" saíram
   da UI (`cotasEditaveis: []`) e o motor impôs **4 por termo**, **3 por hora** e
   **9 por dia** — o teto diário caiu de 20 para 9. O pop-up mostra só o aviso das
@@ -157,6 +177,11 @@ da build).
 - `tests/smoke-painel-teste.js`, substituído por `tests/smoke-conta.js`.
 
 ### Corrigido
+
+- **`pgv.sh test` não rodava todos os testes da extensão**: a lista era fixa em
+  três suítes e as duas mais novas (`smoke-espera` e `smoke-popups`) ficavam de
+  fora sem avisar. Agora o `tools/testar.sh` acha os testes pelo glob
+  (`tests/smoke-*.js`) — suíte nova entra sozinha.
 
 - **O guard de popup ficava cego depois do envio — e o popup do pós-candidatura
   ficava na frente da lista** (`content.js`): o guard só agia enquanto
