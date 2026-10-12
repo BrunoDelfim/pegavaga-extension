@@ -217,7 +217,7 @@ interface PresetLuz {
 interface VarreduraLuz {
   running?: boolean;
   paused?: boolean;
-  pauseReason?: string;
+  pauseReason?: string | null; // a fila grava `null` quando não há motivo
   resumeAt?: number | null;
   problem?: string;
   urls?: unknown;

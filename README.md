@@ -24,12 +24,13 @@ estratégia de produto, não código de cliente.
 extensao/
 ├── manifest.json   # Manifest V3: permissões, service worker e content script
 ├── src/            # A FONTE do código (TypeScript) — é aqui que se edita
-│   ├── edicoes.ts  # Perfis de edição (free/premium): a política de cada plano
-│   ├── shared.ts   # Constantes e utilitários puros (o maior dos arquivos)
-│   └── tipos/      # Tipos compartilhados entre os arquivos (globais.d.ts)
+│   ├── edicoes.ts    # Perfis de edição (free/premium): a política de cada plano
+│   ├── shared.ts     # Constantes e utilitários puros (o maior dos arquivos)
+│   ├── background.ts # Service worker: o agendador (chrome.alarms, tabs, avisos)
+│   └── tipos/        # Tipos compartilhados entre os arquivos (globais.d.ts)
 ├── edicoes.js      # GERADO de src/edicoes.ts — não edite este arquivo à mão
 ├── shared.js       # GERADO de src/shared.ts — não edite este arquivo à mão
-├── background.js   # Service worker: agendador (chrome.alarms)
+├── background.js   # GERADO de src/background.ts — não edite este arquivo à mão
 ├── popup.html      # Interface (configuração, cotas, agendador + contador)
 ├── popup.js        # Fila de termos, orquestração da aba e geração do CSV
 ├── content.js      # Scraping do DOM do LinkedIn, candidatura, fila e storage

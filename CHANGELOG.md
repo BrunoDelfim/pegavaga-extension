@@ -18,13 +18,15 @@ da build).
 ### Adicionado
 
 - **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código
-  está migrando de JavaScript para TypeScript **um arquivo por vez**, começando pelo
-  `edicoes.js` (`src/edicoes.ts` — o menor e sem DOM). O compilador (TypeScript
+  está migrando de JavaScript para TypeScript **um arquivo por vez** — começou pelos
+  menores e sem DOM (`src/edicoes.ts`, `src/shared.ts`) e chegou ao service worker
+  (`src/background.ts`). O compilador (TypeScript
   5.9.3) e os tipos do Chrome são baixados **pelo próprio Node**, em versão fixa
   (`tools/baixar-tipos.js`: `https` + `zlib` + um leitor de tar de ~40 linhas — sem
   `npm`, sem `package.json`, sem depender de registro de pacotes), e o `.js` gerado
-  continua **versionado** e idêntico em comportamento (conferido: mesmos perfis,
-  mesma superfície de API e os 272 testes passando). Quem instala a extensão **não**
+  continua **versionado** e idêntico em comportamento (conferido a cada passo: os
+  mesmos perfis e utilitários campo a campo, o mesmo `chrome.*` chamado na mesma
+  ordem pelo worker, e os 272 testes passando). Quem instala a extensão **não**
   precisa compilar nada.
 - **Guarda do artefato versionado** (`tools/conferir-gerado.sh`): como o `.js` da
   raiz é commitado, este script responde à pergunta que isso sempre levanta — *o
@@ -45,8 +47,8 @@ da build).
 - **`.gitattributes`** marcando os `.js` gerados com `linguist-generated=true -diff`:
   o GitHub recolhe esses arquivos no diff do PR e não os conta na estatística de
   linguagens, e o `git diff` local não despeja milhares de linhas de reformatação (o
-  diff que se lê é o do `src/*.ts`). A lista é por arquivo — `background.js`,
-  `popup.js` e `content.js` continuam fonte escrita à mão até migrarem.
+  diff que se lê é o do `src/*.ts`). A lista é por arquivo — `popup.js` e
+  `content.js` continuam fonte escrita à mão até migrarem.
 - **Build e testes no Docker** (`Dockerfile`, `docker-compose.yml`, `docker/`): o
   mesmo build roda num container (Node 22 + o toolchain embutido na imagem), para
   máquina sem Node instalado. O container trabalha como o **seu** usuário — nada de

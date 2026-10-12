@@ -5,10 +5,11 @@
 > repositório — os pontos verificados estão marcados com ✅.
 >
 > **Estado hoje:** o caminho sem npm (§3, com uma correção importante), o
-> `tsconfig.json` (§6), a ponte entre arquivos sem ESM (§5) e o **passo 1** da ordem
-> (§7 — `edicoes.js`) estão no repositório e verdes: `./pgv.sh build`,
-> `./pgv.sh check` e `./pgv.sh test` (272 testes) passam, e o `.js` gerado é
-> equivalente ao escrito à mão. Os passos **2 a 5 seguem como plano**. Há também o
+> `tsconfig.json` (§6), a ponte entre arquivos sem ESM (§5) e os **passos 1 a 3** da
+> ordem (§7 — `edicoes.js`, `shared.js` e `background.js`) estão no repositório e
+> verdes: `./pgv.sh build`, `./pgv.sh check`, `./pgv.sh conferir` e `./pgv.sh test`
+> (272 testes) passam, e cada `.js` gerado saiu equivalente ao escrito à mão na
+> comparação do §7. Os passos **4 e 5 seguem como plano**. Há também o
 > **build em container** (`Dockerfile`, `docker-compose.yml`) para máquina sem Node.
 
 ## 1. Ponto de partida (medido)
@@ -128,6 +129,15 @@ consequências práticas:
   declarados no topo (script sem `import` ⇒ tipo de topo é global, e o
   `shared.ts` poderá usá-los sem importar nada) e o que sai do arquivo é derivado:
   `type PegaVagaEdicoesApi = typeof apiEdicoes;`.
+- **D6 — O service worker inteiro num IIFE.** ✅ O `background.js` **não publica
+  nada**: ninguém o carrega esperando uma API (o pop-up e o content script só falam
+  com ele por mensagem), ao contrário do `shared.js`/`edicoes.js`. Mas ele tem ~30
+  nomes de topo, que num script clássico viram globais — e, como o `tsc` compila
+  todos os fontes no **mesmo** escopo global, eles colidiriam com os do `popup.ts` e
+  do `content.ts` quando esses migrarem (o `popup.js` de hoje já tem `SHARED` e
+  `MSG`; o `sendToTab` existe nos dois). Por isso o `src/background.ts` é um IIFE
+  inteiro — e os tipos dele também vivem lá dentro, pelo mesmo motivo. Conferido na
+  comparação do §7: o antigo deixava 22 nomes no global, o gerado nenhum.
 
 ## 5. Como os arquivos conversam (sem ESM) ✅
 
@@ -228,7 +238,7 @@ Armadilhas que já apareceram no rascunho:
 | - | ------- | ------------------- | ------------- | ------ |
 | 1 | `edicoes.js` → `src/edicoes.ts` | o menor (180 linhas) e sem DOM: valida o pipeline inteiro (baixar tipos, build, emit, extensão carregando) com risco mínimo | `tests/smoke-edicoes.js` | ✅ **feito** |
 | 2 | `shared.js` → `src/shared.ts` | o **maior ganho**: é puro, é o que os testes mais exercitam, e é onde os tipos mais valem (`Settings`, `apply.answers`, `APPLY_OUTCOMES`, `APPLY_KINDS`, o motor de espera) | `smoke-espera` + `smoke-edicoes` + `smoke-conta` | ✅ **feito** |
-| 3 | `background.js` → `src/background.ts` | `chrome.*` tipado de verdade (alarms, tabs, windows, notifications) | `smoke-ajuda` | ⏳ |
+| 3 | `background.js` → `src/background.ts` | `chrome.*` tipado de verdade (alarms, tabs, windows, notifications) | `smoke-ajuda` | ✅ **feito** |
 | 4 | `popup.js` → `src/popup.ts` | a UI; o DOM falso do `smoke-conta` já cobre o essencial | `smoke-conta` | ⏳ |
 | 5 | `content.js` → `src/content.ts` | por último: 3167 linhas, o mais acoplado ao DOM do LinkedIn (helpers de `query`, espera, fluxo de candidatura) | os cinco + teste manual no LinkedIn | ⏳ |
 
@@ -252,6 +262,32 @@ perfil reserva do `shared.ts` havia ganhado um `painelAdmin: false` que o
 `shared.js` antigo não tinha (o `painelAdmin` é do PAPEL da conta, não da edição;
 agora o literal omite a chave e o `as PerfilEdicao` fica só no tipo).
 
+O passo 3 cumpriu o mesmo protocolo: `tsc` sem erro (com `strict`), os cinco smoke
+com os mesmos **272 testes** e o `conferir-gerado`. A comparação no `vm` foi a mais
+exigente até aqui — o worker é feito de chamadas ao `chrome.*` —, então um `chrome`
+falso gravou **toda** chamada (storage, alarms, tabs, windows, action e
+notifications) e as duas versões rodaram a mesma história: subida do worker,
+`onInstalled`, agendador ligado, tick começando sozinho, tick encerrando fora da
+janela, retomada por cota, cutucada sem resposta (com recarga da aba), proteção da
+conta, `onChanged`, pedido de ajuda com clique nos dois botões, clique num aviso
+alheio, `PEGAVAGA_AJUDA_FECHAR` e `PEGAVAGA_PROGRESS` — em três ambientes (sem
+canvas, sem a API de notificações, e com `OffscreenCanvas`/`fetch` e uma aba do
+LinkedIn já aberta). Resultado: **696 registros de chamada, idênticos**, mais a
+checagem de que o gerado não acrescenta global nenhum (§D6).
+
+Duas coisas que o passo 3 ensinou:
+
+- **O cenário só chega ao `startRun` com o perfil do servidor aplicado.** A primeira
+  versão da comparação "passava" sem nunca começar uma execução: sem o cache do
+  `/plano`, o `parseSettings` aplica o **free** e desliga o agendador (é o
+  `temFeature('scheduler')`), exatamente como no navegador de quem não tem
+  assinatura. O ambiente de teste passou a gravar o cache do perfil antes de ligar o
+  agendador — e aí o `startRun`, o `stopRun` e o `nudge` entraram na trilha.
+- **Um tipo do `shared.ts` estava impreciso:** `VarreduraLuz.pauseReason` era
+  `string`, mas a fila grava `null` quando não há motivo (`FilaExecucao` já dizia
+  `string | null`, como o `resumeAt`). O ajuste é **só de tipo** — o `shared.js`
+  gerado continua byte a byte igual, como o `conferir-gerado` comprova.
+
 ## 8. Riscos e como evitar
 
 - **Editar o `.js` gerado por engano** — é o risco número um desta migração (o
@@ -271,8 +307,8 @@ agora o literal omite a chave e o `as PerfilEdicao` fica só no tipo).
   levam `linguist-generated=true -diff`, então o diff que se lê no GitHub é o do
   `src/*.ts` (o gerado aparece recolhido, e o `git diff` local mostra só
   "Binary files ... differ" — `git diff --text` força o conteúdo). A lista é por
-  arquivo, para não marcar como gerados o `background.js`, o `popup.js` e o
-  `content.js` antes de eles migrarem.
+  arquivo, para não marcar como gerados o `popup.js` e o `content.js` antes de eles
+  migrarem (o `background.js` entrou na lista no passo 3).
 - **Tipos globais**: se alguém esquecer de declarar um global novo no
   `src/tipos/globais.d.ts`, o erro aparece no `tsc` (não em runtime) — que é
   exatamente a ajuda que se quer.
@@ -359,8 +395,9 @@ Três decisões que valem registro:
 **Apresentação** — `.gitattributes` marca os `.js` **já gerados**:
 
 ```
-edicoes.js  linguist-generated=true -diff
-shared.js   linguist-generated=true -diff
+edicoes.js     linguist-generated=true -diff
+shared.js      linguist-generated=true -diff
+background.js  linguist-generated=true -diff
 ```
 
 - `linguist-generated=true` é do **GitHub**: recolhe o arquivo no diff do PR e o tira
@@ -369,9 +406,9 @@ shared.js   linguist-generated=true -diff
   linhas de reformatação. O diff que importa é o do `src/*.ts`. Para ver o conteúdo:
   `git diff --text -- shared.js`.
 
-A lista é **por arquivo** de propósito: `background.js`, `popup.js` e `content.js`
-ainda são fonte escrita à mão (passos 3 a 5 da §7) e marcá-los como gerados seria
-mentira no diff. Ao migrar cada um, move-se o nome para a lista, no mesmo commit.
+A lista é **por arquivo** de propósito: `popup.js` e `content.js` ainda são fonte
+escrita à mão (passos 4 e 5 da §7) e marcá-los como gerados seria mentira no diff.
+Ao migrar cada um, move-se o nome para a lista, no mesmo commit.
 
 > A marcação é só apresentação: quem **prova** a correspondência fonte↔artefato é o
 > `tools/conferir-gerado.sh` (§8). Nenhum dos dois interfere no que o Chrome carrega.

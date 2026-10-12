@@ -20,14 +20,15 @@
 #                            dele. Para ver o conteúdo assim mesmo:
 #                              git diff --text -- shared.js
 #
-# A LISTA É POR ARQUIVO, de propósito: `background.js`, `popup.js` e `content.js`
-# ainda são FONTE escrita à mão (passos 3 a 5 da migração) e não podem ser
-# marcados como gerados sem isso virar mentira no diff. Ao migrar cada um, mova o
-# nome para a lista abaixo, no mesmo commit.
+# A LISTA É POR ARQUIVO, de propósito: `popup.js` e `content.js` ainda são FONTE
+# escrita à mão (passos 4 e 5 da migração) e não podem ser marcados como gerados
+# sem isso virar mentira no diff. Ao migrar cada um, mova o nome para a lista
+# abaixo, no mesmo commit.
 #
 # Quem confere de verdade que o arquivo marcado aqui corresponde ao fonte é
 # `tools/conferir-gerado.sh` (não a marcação): ela é só apresentação.
 # =============================================================================
 
-edicoes.js  linguist-generated=true -diff
-shared.js   linguist-generated=true -diff
+edicoes.js     linguist-generated=true -diff
+shared.js      linguist-generated=true -diff
+background.js  linguist-generated=true -diff

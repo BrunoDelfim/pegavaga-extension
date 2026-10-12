@@ -20,6 +20,9 @@
  * `declare var` e não `declare const`: a publicação é uma atribuição em
  * `globalThis`, e só `var` é propriedade do objeto global.
  *
+ * Aqui também mora o que o AMBIENTE dá e o `lib.dom` não declara: o worker é o
+ * único dos três contextos com `importScripts`.
+ *
  * Duas regras valem para todos os fontes desta pasta:
  *   1. O nome de todo `var`/`const`/`function` de topo é ÚNICO no projeto — os
  *      scripts dividem o mesmo repositório global, e dois `const` com o mesmo
@@ -37,3 +40,12 @@ declare var PegaVagaEdicoes: PegaVagaEdicoesApi;
  * que o pop-up, o content script e o service worker leem.
  */
 declare var PegaVagaShared: PegaVagaSharedApi;
+
+/**
+ * Carrega os scripts clássicos do pacote dentro do service worker
+ * (`background.ts` chama `importScripts('edicoes.js')` e o do `shared.js`). Não é
+ * uma função nossa: é do ambiente do worker — existe em runtime exatamente como
+ * sempre existiu, e só o `lib.webworker` a declara (o `lib.dom`, que é o que o
+ * `tsconfig` usa, não tem `importScripts`).
+ */
+declare function importScripts(...urls: string[]): void;
