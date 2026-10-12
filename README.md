@@ -1,5 +1,7 @@
 # PegaVaga — Extensão do Chrome (Manifest V3)
 
+[![testes](https://github.com/BrunoDelfim/pegavaga-extension/actions/workflows/testes.yml/badge.svg)](https://github.com/BrunoDelfim/pegavaga-extension/actions/workflows/testes.yml)
+
 Extensão para automatizar o rastreamento **e as candidaturas** no LinkedIn:
 cadastra uma **URL de busca (ou perfil)** e uma lista de **termos**, varre cada
 termo automaticamente, captura **título, empresa, link e descrição completa** de
@@ -23,9 +25,10 @@ extensao/
 ├── manifest.json   # Manifest V3: permissões, service worker e content script
 ├── src/            # A FONTE do código (TypeScript) — é aqui que se edita
 │   ├── edicoes.ts  # Perfis de edição (free/premium): a política de cada plano
+│   ├── shared.ts   # Constantes e utilitários puros (o maior dos arquivos)
 │   └── tipos/      # Tipos compartilhados entre os arquivos (globais.d.ts)
 ├── edicoes.js      # GERADO de src/edicoes.ts — não edite este arquivo à mão
-├── shared.js       # Constantes e utilitários puros (cotas, janelas, ritmo e motivos)
+├── shared.js       # GERADO de src/shared.ts — não edite este arquivo à mão
 ├── background.js   # Service worker: agendador (chrome.alarms)
 ├── popup.html      # Interface (configuração, cotas, agendador + contador)
 ├── popup.js        # Fila de termos, orquestração da aba e geração do CSV
@@ -40,6 +43,7 @@ extensao/
 │   ├── baixar-tipos.js         # baixa o tsc e os tipos do Chrome (só Node)
 │   ├── build.sh                # build: baixar + compilar + marcar (./pgv.sh build)
 │   ├── cabecalho.js            # marca o JS gerado com "não edite à mão"
+│   ├── conferir-gerado.sh      # prova que o .js versionado é o que src/ produz
 │   └── testar.sh               # roda os cinco smokes (./pgv.sh test)
 ├── tsconfig.json   # Configuração do TypeScript (src/ → a raiz)
 ├── Dockerfile      # O build num container, para máquina sem Node
@@ -49,7 +53,10 @@ extensao/
 │   ├── candidatura-externa.md  # vaga no site da empresa: abrir, preencher e revisar
 │   └── migracao-typescript.md  # trocar o JS por TS (e o build sem npm)
 ├── CHANGELOG.md    # Histórico de versões (a regra está no README)
-└── README.md
+├── README.md
+├── .github/        # CI: tipos, artefato versionado e smokes em cada push
+│   └── workflows/testes.yml
+└── .gitattributes  # marca os .js gerados (o GitHub recolhe o diff deles)
 ```
 
 Este repositório é **só a extensão**. A API de licenças (Python) vive num
@@ -76,8 +83,24 @@ raiz e o marca com o aviso de "não edite à mão":
 ```sh
 ./pgv.sh build                  # ou, dentro de extensao/: ./tools/build.sh
 ./pgv.sh check                  # confere os tipos, sem escrever arquivo
+./pgv.sh conferir               # prova que o .js versionado é o que src/ produz
 ./pgv.sh test                   # os cinco smokes (ou: ./tools/testar.sh)
 ```
+
+Como o `.js` da raiz é **versionado** (é ele que o Chrome carrega), a pergunta que
+todo artefato versionado levanta — *o arquivo commitado é mesmo o que o fonte
+produz?* — tem resposta automática:
+
+```sh
+cd extensao
+./tools/conferir-gerado.sh      # não escreve nada na raiz
+```
+
+Ele compila `src/` para um diretório temporário, aplica o mesmo cabeçalho e compara
+**byte a byte** com o que está no repositório, dizendo `ok`, `DIFERE` (o `.js` está
+velho ou foi editado à mão — rode o build), `FALTA` (o fonte existe e o `.js` não foi
+commitado) ou `órfão` (`.js` marcado como gerado sem fonte em `src/`). Sai com código
+diferente de zero quando algo diverge, então serve de pré-commit ou de CI.
 
 **Não existe `npm install` em lugar nenhum** — nem `package.json`. O compilador
 (TypeScript 5.9.3) e os tipos do Chrome (`@types/chrome`) são baixados pelo próprio
@@ -152,6 +175,25 @@ chega atrasado). O teste também confere as redações do **aviso de limite** do
 LinkedIn (`looksRateLimited`): é o único dialog que o guard não fecha, então é o
 que faz a varredura **parar sozinha** — sem reconhecê-las, ela ficava presa com o
 aviso na frente da lista.
+
+### CI (GitHub Actions)
+
+[`.github/workflows/testes.yml`](.github/workflows/testes.yml) roda em cada push e
+pull request, com os **mesmos scripts** que você usa na máquina (o CI não tem
+caminho próprio — é o que garante que ele teste o que você testa):
+
+| Job | O que responde |
+| --- | --- |
+| **tipos · artefato · smokes** | 1. os tipos fecham? (`build.sh --conferir`) 2. o `.js` versionado é o que `src/` produz? (`conferir-gerado.sh`) 3. os smokes passam? (`testar.sh`) |
+| **mesmo resultado no container** | o build dentro do Docker gera o **mesmo byte** do commitado (o `git status` tem de ficar limpo depois) e os smokes passam lá dentro também |
+
+Como o `.js` é versionado, é o CI que cobra por máquina as duas regras que antes
+dependiam de disciplina: **não editar o artefato** e **não commitar o `.js` velho**.
+O job do container existe porque o README promete "igual byte a byte" — promessa que
+agora é verificada, e não afirmada.
+
+O CI **não** publica nada e **não** compila para quem usa a extensão: quem baixa o
+repositório continua carregando o `.js` versionado sem rodar build nenhum.
 
 ## Edições (free, portfólio e premium)
 

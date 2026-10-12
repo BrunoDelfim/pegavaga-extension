@@ -26,6 +26,27 @@ da build).
   continua **versionado** e idêntico em comportamento (conferido: mesmos perfis,
   mesma superfície de API e os 272 testes passando). Quem instala a extensão **não**
   precisa compilar nada.
+- **Guarda do artefato versionado** (`tools/conferir-gerado.sh`): como o `.js` da
+  raiz é commitado, este script responde à pergunta que isso sempre levanta — *o
+  arquivo versionado é mesmo o que `src/` produz?* Ele compila para um diretório
+  temporário, aplica o mesmo cabeçalho e compara **byte a byte**: `ok`, `DIFERE`
+  (artefato velho ou editado à mão), `FALTA` (fonte sem `.js` no repositório) e
+  `órfão` (`.js` gerado sem fonte). Sai com código diferente de zero e **não escreve
+  nada na raiz** — serve de pré-commit ou de CI. O `tools/cabecalho.js` ganhou um
+  diretório de destino opcional para isso (o padrão continua sendo a raiz).
+- **CI no GitHub Actions** (`.github/workflows/testes.yml`, badge no README): em cada
+  push e pull request, dois jobs com os **mesmos scripts** de `tools/` que se roda na
+  máquina — o primeiro confere os tipos, o artefato versionado e os cinco smokes; o
+  segundo constrói a imagem, roda o build **dentro do container** e exige que o
+  repositório fique limpo (prova de que o container gera byte a byte o mesmo `.js`) e
+  roda os smokes lá dentro também. As duas regras que dependiam de disciplina —
+  "não editar o artefato" e "não commitar o `.js` velho" — passam a ser cobradas por
+  máquina.
+- **`.gitattributes`** marcando os `.js` gerados com `linguist-generated=true -diff`:
+  o GitHub recolhe esses arquivos no diff do PR e não os conta na estatística de
+  linguagens, e o `git diff` local não despeja milhares de linhas de reformatação (o
+  diff que se lê é o do `src/*.ts`). A lista é por arquivo — `background.js`,
+  `popup.js` e `content.js` continuam fonte escrita à mão até migrarem.
 - **Build e testes no Docker** (`Dockerfile`, `docker-compose.yml`, `docker/`): o
   mesmo build roda num container (Node 22 + o toolchain embutido na imagem), para
   máquina sem Node instalado. O container trabalha como o **seu** usuário — nada de

@@ -1,0 +1,111 @@
+# =============================================================================
+# PegaVaga — extensão — CI (GitHub Actions)
+#
+# Roda as três perguntas deste repositório em cada push e cada pull request:
+#
+#   1. os tipos fecham?            (tsc --noEmit, no modo estrito)
+#   2. o .js versionado é o que src/ produz?   (tools/conferir-gerado.sh)
+#   3. os smokes passam?           (tools/testar.sh)
+#
+# e ainda uma quarta, que é a promessa do Dockerfile: o MESMO resultado saindo do
+# container — se o build de dentro do container escrevesse bytes diferentes, o
+# `git status` ficaria sujo e o job falharia.
+#
+# Quem chama são os scripts de `tools/` (não o `pgv.sh`, que vive FORA dos dois
+# repositórios). É o motivo de o "como compilar" morar dentro do repositório: quem
+# tem só a extensão tem os mesmos comandos — e o CI usa exatamente os mesmos.
+#
+# Nada aqui compila a extensão para QUEM USA: o `.js` continua versionado. O CI
+# existe para quem EDITA.
+# =============================================================================
+name: testes
+
+# Todo push (qualquer branch, inclusive tag) e todo pull request. `workflow_dispatch`
+# é para poder rodar à mão pela aba Actions quando quiser.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# O CI só lê o repositório: token sem poder de escrita.
+permissions:
+  contents: read
+
+# Push novo no mesmo branch cancela o que ainda estava rodando: o resultado do
+# commit antigo não interessa mais e a fila não acumula.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # No Node do runner: tipos, artefato versionado e smokes.
+  # ---------------------------------------------------------------------------
+  extensao:
+    name: tipos · artefato · smokes (Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Sem npm, sem package.json: o compilador e os @types do Chrome vêm em
+      # versão fixa pelo próprio Node (tools/baixar-tipos.js). Roda explicitamente
+      # (o build.sh já chamaria) para a falha de rede aparecer sozinha e cedo.
+      - name: Toolchain do TypeScript (versão fixa, sem npm)
+        run: node tools/baixar-tipos.js
+
+      - name: 1. Os tipos fecham?
+        run: ./tools/build.sh --conferir
+
+      - name: 2. O .js versionado é o que src/ produz?
+        run: ./tools/conferir-gerado.sh
+
+      - name: 3. Os smokes passam?
+        run: ./tools/testar.sh
+
+  # ---------------------------------------------------------------------------
+  # A mesma coisa dentro do container: é a promessa "igual byte a byte" que o
+  # Dockerfile e o README fazem, agora cobrada por máquina.
+  # ---------------------------------------------------------------------------
+  container:
+    name: mesmo resultado no container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Constrói a imagem do build
+        run: docker compose build
+
+      # O container roda como o SEU usuário (o compose usa ${PGV_UID:-1000}) e no
+      # runner o uid não é 1000: sem exportar estes dois, o tsc não teria permissão
+      # de escrever no repositório montado — é o ajuste que o docker-compose.yml
+      # documenta no comentário do `user:`.
+      - name: Build dentro do container
+        run: |
+          export PGV_UID="$(id -u)" PGV_GID="$(id -g)"
+          docker compose run --rm extensao ./tools/build.sh
+
+      - name: O container produz o MESMO byte
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo ">>> o build no container MUDOU o repositório — não é o mesmo resultado:"
+            git status --porcelain
+            git --no-pager diff --text --stat
+            exit 1
+          fi
+          echo "ok: o JS gerado no container é idêntico ao commitado."
+
+      - name: Smokes dentro do container
+        run: |
+          export PGV_UID="$(id -u)" PGV_GID="$(id -g)"
+          docker compose run --rm extensao ./tools/testar.sh

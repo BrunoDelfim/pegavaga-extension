@@ -2,13 +2,20 @@
 /* =============================================================================
  * PegaVaga - tools/cabecalho.js
  * Põe o aviso "GERADO de src/<arquivo>.ts — não edite aqui" no topo de cada JS
- * que o tsc escreveu na raiz.
+ * que o tsc escreveu.
  *
  * Roda depois do `tsc` (ver o `build` no pgv.sh). É Node puro, sem dependência:
  * o tsc não tem opção de banner, e o cabeçalho é o que evita o erro clássico
  * desta migração — abrir o `content.js` da raiz e editar o arquivo GERADO.
  *
- *   node tools/cabecalho.js
+ *   node tools/cabecalho.js              marca os JS da raiz (pós-build)
+ *   node tools/cabecalho.js /tmp/saida   marca a cópia recém-compilada em outro
+ *                                        diretório — é assim que o
+ *                                        tools/conferir-gerado.sh monta, lado a
+ *                                        lado, o que o fonte PRODUZ e o que
+ *                                        está versionado (o aviso sai igualzinho
+ *                                        nos dois, então o `cmp` compara só o
+ *                                        que importa).
  * ===========================================================================*/
 
 'use strict';
@@ -16,8 +23,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const RAIZ = path.join(__dirname, '..');
-const SRC = path.join(RAIZ, 'src');
+/* A FONTE é sempre a pasta src/ do repositório; só o DESTINO pode mudar. */
+const REPO = path.join(__dirname, '..');
+const RAIZ = process.argv[2] ? path.resolve(process.argv[2]) : REPO;
+const SRC = path.join(REPO, 'src');
 
 if (!fs.existsSync(SRC)) {
   console.error('não achei src/ — rode a partir do repositório da extensão.');

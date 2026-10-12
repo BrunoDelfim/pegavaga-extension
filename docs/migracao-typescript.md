@@ -227,7 +227,7 @@ Armadilhas que já apareceram no rascunho:
 | # | Arquivo | Por que nesta ordem | O que protege | Estado |
 | - | ------- | ------------------- | ------------- | ------ |
 | 1 | `edicoes.js` → `src/edicoes.ts` | o menor (180 linhas) e sem DOM: valida o pipeline inteiro (baixar tipos, build, emit, extensão carregando) com risco mínimo | `tests/smoke-edicoes.js` | ✅ **feito** |
-| 2 | `shared.js` → `src/shared.ts` | o **maior ganho**: é puro, é o que os testes mais exercitam, e é onde os tipos mais valem (`Settings`, `apply.answers`, `APPLY_OUTCOMES`, `APPLY_KINDS`, o motor de espera) | `smoke-espera` + `smoke-edicoes` + `smoke-conta` | ⏳ próximo |
+| 2 | `shared.js` → `src/shared.ts` | o **maior ganho**: é puro, é o que os testes mais exercitam, e é onde os tipos mais valem (`Settings`, `apply.answers`, `APPLY_OUTCOMES`, `APPLY_KINDS`, o motor de espera) | `smoke-espera` + `smoke-edicoes` + `smoke-conta` | ✅ **feito** |
 | 3 | `background.js` → `src/background.ts` | `chrome.*` tipado de verdade (alarms, tabs, windows, notifications) | `smoke-ajuda` | ⏳ |
 | 4 | `popup.js` → `src/popup.ts` | a UI; o DOM falso do `smoke-conta` já cobre o essencial | `smoke-conta` | ⏳ |
 | 5 | `content.js` → `src/content.ts` | por último: 3167 linhas, o mais acoplado ao DOM do LinkedIn (helpers de `query`, espera, fluxo de candidatura) | os cinco + teste manual no LinkedIn | ⏳ |
@@ -238,19 +238,41 @@ os três — e, antes do teste manual, o `edicoes.js` gerado foi comparado com o
 escrito à mão no mesmo `vm` dos testes: `PERFIS`, `FURTIVIDADE_SAO` e a superfície
 da API saíram **idênticos**.
 
+O passo 2 cumpriu `tsc` sem erro (com `strict`) e os cinco smoke (272 testes). A
+mesma comparação no `vm` foi repetida, agora entre o `shared.js` antigo e o
+gerado, e cobriu **151 checagens**: as 77 chaves da API (mesma ordem, mesmo tipo,
+mesma aridade de função), todas as constantes campo a campo (`STORAGE`, `MSG`,
+`DEFAULT_SETTINGS`, `POPUP_GUARD`, `AJUDA_*`, `APPLY_*`, `DIALOG_KINDS`,
+`LIMIT_LABELS`…) e o resultado de
+~140 chamadas reais — cotas, agenda, `parseSettings`, `buildRunQueue`,
+`classifyApply`/`classifyDialog`, `popupGuardMode`, `statusLight`, o relatório de
+candidaturas e o motor de espera (inclusive o caso assíncrono, com o `wake()` do
+sinal) — **sem uma única diferença**. O que a comparação pegou e foi corrigido: o
+perfil reserva do `shared.ts` havia ganhado um `painelAdmin: false` que o
+`shared.js` antigo não tinha (o `painelAdmin` é do PAPEL da conta, não da edição;
+agora o literal omite a chave e o `as PerfilEdicao` fica só no tipo).
+
 ## 8. Riscos e como evitar
 
 - **Editar o `.js` gerado por engano** — é o risco número um desta migração (o
   arquivo que o Chrome carrega volta a ser um artefato). Mitigação: o cabeçalho
   "GERADO de `src/x.ts` — não edite aqui" em todo arquivo emitido (D2) e o build
-  sobrescrevendo a raiz.
+  sobrescrevendo a raiz. ✅ **Guarda automática:** `tools/conferir-gerado.sh`
+  compila `src/` para um diretório temporário e compara **byte a byte** com o `.js`
+  versionado — pega a edição à mão, o `.js` velho, o fonte sem `.js` commitado e o
+  `.js` órfão, com código de saída ≠ 0.
 - **`.gitignore`**: ✅ feito, com um ajuste ao que estava previsto: o ignorado é o
   **resultado** (`tools/typescript/` e `tools/node_modules/`), não `tools/` inteiro
   — os scripts do build são o toolchain e **entram** no git. E **nada** de ignorar
   `*.js` na raiz: ele passa a ser o artefato versionado.
 - **Diffs maiores**: cada mudança passa a tocar o `.ts` e o `.js` (mais o `.map`,
   se D3 for "commitar"). O cabeçalho resolve a leitura, mas vale dizer no README
-  qual dos dois é a fonte.
+  qual dos dois é a fonte. ✅ Feito também no `.gitattributes`: os `.js` já gerados
+  levam `linguist-generated=true -diff`, então o diff que se lê no GitHub é o do
+  `src/*.ts` (o gerado aparece recolhido, e o `git diff` local mostra só
+  "Binary files ... differ" — `git diff --text` força o conteúdo). A lista é por
+  arquivo, para não marcar como gerados o `background.js`, o `popup.js` e o
+  `content.js` antes de eles migrarem.
 - **Tipos globais**: se alguém esquecer de declarar um global novo no
   `src/tipos/globais.d.ts`, o erro aparece no `tsc` (não em runtime) — que é
   exatamente a ajuda que se quer.
@@ -265,6 +287,7 @@ da API saíram **idênticos**.
 ```sh
 ./pgv.sh build                  # compila: toolchain (se faltar) + tsc + cabeçalho
 ./pgv.sh check                  # só confere os tipos, sem escrever arquivo
+./pgv.sh conferir               # prova que o .js versionado é o que src/ produz
 ./pgv.sh test                   # os cinco smokes (sem lista fixa: o glob acha)
 ```
 
@@ -276,6 +299,7 @@ quem clona só a extensão tem os mesmos comandos:
 cd extensao
 ./tools/build.sh              # compila
 ./tools/build.sh --conferir   # confere os tipos
+./tools/conferir-gerado.sh    # confere o artefato versionado (não escreve nada)
 ./tools/testar.sh             # testa
 ```
 
@@ -305,5 +329,51 @@ onde a pressa não ajuda.
 
 > Se a decisão for o contrário (externa primeiro, TS depois), o plano da externa
 > continua válido: só vai chegar como JS e ser tipado no passo 2.
+
+## 11. CI e a apresentação do gerado ✅
+
+Duas peças fecham o que a §8 listou como risco: o artefato versionado passa a ser
+**cobrado por máquina** e a leitura do diff deixa de ser poluída.
+
+**CI** — `.github/workflows/testes.yml` (`name: testes`; badge no README), em cada
+push e pull request. Dois jobs:
+
+| Job | Passos | O que prova |
+| --- | --- | --- |
+| `extensao` | `node tools/baixar-tipos.js` → `./tools/build.sh --conferir` → `./tools/conferir-gerado.sh` → `./tools/testar.sh` | tipos fecham, o `.js` versionado é o que `src/` produz, os smokes passam |
+| `container` | `docker compose build` → `./tools/build.sh` (dentro) → `git status --porcelain` vazio → `./tools/testar.sh` (dentro) | o container gera **o mesmo byte** e os smokes valem lá dentro também |
+
+Três decisões que valem registro:
+
+1. **O CI chama os scripts de `tools/`, não o `pgv.sh`** — exatamente pelo motivo da
+   §9: o "como compilar" mora dentro do repositório. Se o CI tivesse caminho próprio,
+   ele poderia testar uma coisa e você outra.
+2. **`PGV_UID`/`PGV_GID` exportados no job do container**: no runner do GitHub o uid é
+   `1001`, e o `docker-compose.yml` roda como `${PGV_UID:-1000}` — sem exportar, o
+   `tsc` de dentro do container não poderia escrever no repositório montado. É o
+   mesmo ajuste que o comentário do `user:` já documentava para quem tem UID ≠ 1000.
+3. **A prova do container é o `git status` limpo**, não um `cmp` à parte: se os bytes
+   mudassem (ou se um arquivo não pedido aparecesse), o repositório ficaria sujo e o
+   job falharia — com `git diff --text` no log para dizer o quê.
+
+**Apresentação** — `.gitattributes` marca os `.js` **já gerados**:
+
+```
+edicoes.js  linguist-generated=true -diff
+shared.js   linguist-generated=true -diff
+```
+
+- `linguist-generated=true` é do **GitHub**: recolhe o arquivo no diff do PR e o tira
+  da estatística de linguagens (senão o JS gerado viraria a linguagem "dominante").
+- `-diff` é do **git**: trata como binário, então o `git diff` não despeja milhares de
+  linhas de reformatação. O diff que importa é o do `src/*.ts`. Para ver o conteúdo:
+  `git diff --text -- shared.js`.
+
+A lista é **por arquivo** de propósito: `background.js`, `popup.js` e `content.js`
+ainda são fonte escrita à mão (passos 3 a 5 da §7) e marcá-los como gerados seria
+mentira no diff. Ao migrar cada um, move-se o nome para a lista, no mesmo commit.
+
+> A marcação é só apresentação: quem **prova** a correspondência fonte↔artefato é o
+> `tools/conferir-gerado.sh` (§8). Nenhum dos dois interfere no que o Chrome carrega.
 
 

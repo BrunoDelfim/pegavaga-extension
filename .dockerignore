@@ -4,6 +4,8 @@
 # hora de rodar, então só o baixador do toolchain precisa estar nela.
 .git/
 .gitignore
+.gitattributes
+.github/
 *.md
 docs/
 icons/

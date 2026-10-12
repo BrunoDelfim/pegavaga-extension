@@ -30,3 +30,10 @@
 
 /** Perfis de edição (`edicoes.js`): política de free e premium, e quem concede. */
 declare var PegaVagaEdicoes: PegaVagaEdicoesApi;
+
+/**
+ * Constantes e utilitários puros (`shared.js`): cotas, ritmo, relatório de
+ * candidaturas, textos de apoio e o motor de espera por evento. É o contrato
+ * que o pop-up, o content script e o service worker leem.
+ */
+declare var PegaVagaShared: PegaVagaSharedApi;

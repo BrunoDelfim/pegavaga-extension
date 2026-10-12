@@ -1,0 +1,33 @@
+# =============================================================================
+# PegaVaga — extensão — .gitattributes
+#
+# Marca os `.js` da raiz que são SAÍDA do build (`src/*.ts` → `tsc`) e não fonte.
+# O arquivo continua versionado de propósito (D2 do docs/migracao-typescript.md:
+# quem baixa o repositório carrega a extensão sem compilar nada) — o que muda aqui
+# é só COMO o git e o GitHub mostram esse arquivo.
+#
+# Dois atributos, por dois motivos diferentes:
+#
+#   linguist-generated=true  é do GitHub: recolhe o arquivo no diff do pull
+#                            request e o tira da estatística de linguagens do
+#                            repositório (sem isso, o JS gerado apareceria como
+#                            a linguagem "dominante" do projeto).
+#
+#   -diff                    é do git: trata o arquivo como binário, então o
+#                            `git diff` mostra "Binary files ... differ" em vez
+#                            de milhares de linhas de reformatação. O diff que
+#                            importa é o do `src/*.ts` — o `.js` é consequência
+#                            dele. Para ver o conteúdo assim mesmo:
+#                              git diff --text -- shared.js
+#
+# A LISTA É POR ARQUIVO, de propósito: `background.js`, `popup.js` e `content.js`
+# ainda são FONTE escrita à mão (passos 3 a 5 da migração) e não podem ser
+# marcados como gerados sem isso virar mentira no diff. Ao migrar cada um, mova o
+# nome para a lista abaixo, no mesmo commit.
+#
+# Quem confere de verdade que o arquivo marcado aqui corresponde ao fonte é
+# `tools/conferir-gerado.sh` (não a marcação): ela é só apresentação.
+# =============================================================================
+
+edicoes.js  linguist-generated=true -diff
+shared.js   linguist-generated=true -diff
