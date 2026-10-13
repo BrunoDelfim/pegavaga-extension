@@ -17,20 +17,20 @@ da build).
 
 ### Adicionado
 
-- **Teste de DOM REAL** (`tests/smoke-dom.js` + `tests/dom-preenchimento.js`): monta
-  o formulário do Easy Apply como o LinkedIn entrega (o `<select>` sem caixa atrás
+- **Testes de DOM REAL** (`tests/smoke-dom.js` + `tests/dom-preenchimento.js` e
+  `tests/smoke-dom-fluxo.js` + `tests/dom-fluxo.js`, sobre o harness
+  `tests/dom-cromo.js`): montam o LinkedIn como ele é (o `<select>` sem caixa atrás
   do UI do artdeco, rádio sem `name` com cada bolinha no seu container,
-  `role="radio"`) e roda o `content.js` num **Chromium de verdade**
-  (`chrome-headless-shell`), conferindo o que ENTROU no formulário — inclusive os
-  eventos (`input`/`change`/`blur`) e a hora de recarregar a página. É o teste que
-  pega a classe de bug que só aparece com LAYOUT (quem decide o que é "visível" é o
-  `getClientRects`, que só responde dentro de um browser). São 22 verificações:
-  select escondido, rádio sem `name`, rádio custom (`role="radio"`), combobox
-  custom (`role="combobox"`), campo de texto, casamento de opção ignorando
-  caixa/acento, o rótulo que não bate (rede do campo único) e a hora de recarregar.
-  O browser vem de
-  `tools/baixar-chromium.sh` (uma vez, ~120 MB, sem root, sem npm); sem ele o teste
-  se pula sozinho e a suíte segue verde.
+  `role="radio"`, `role="combobox"`) e rodam o `content.js` num **Chromium de
+  verdade** (`chrome-headless-shell`), conferindo o que ENTROU na página — os
+  eventos (`input`/`change`/`blur`) e a hora de recarregar, no primeiro; e o
+  **fluxo inteiro** da candidatura no segundo (a lista de vagas, o botão, o
+  formulário, o pedido de ajuda respondido pelo roteiro como se fosse você, os
+  campos preenchidos, a etapa avançando e o envio confirmado). Juntos, são 32
+  verificações que só um browser com LAYOUT pode dar (quem decide o que é
+  "visível" é o `getClientRects`). O browser vem de
+  `tools/baixar-chromium.sh` (uma vez, ~120 MB, sem root, sem npm); sem ele os
+  dois testes se pulam sozinhos e a suíte segue verde.
 - **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código
   está migrando de JavaScript para TypeScript **um arquivo por vez** — começou pelos
   menores e sem DOM (`src/edicoes.ts`, `src/shared.ts`) e chegou ao service worker
