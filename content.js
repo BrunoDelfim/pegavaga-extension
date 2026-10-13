@@ -3514,10 +3514,69 @@
     }
   }
 
+  /**
+   * Quando o `<select>` ESCONDIDO não aceita a resposta, quem manda é o UI VISÍVEL:
+   * o LinkedIn desenha um botão/combobox por cima e é ele que o React escuta. Clica
+   * no gatilho, espera a lista (`[role="listbox"]`) e clica na opção — a mesma
+   * mecânica do `aplicarEmCombo`, com o gatilho caçado perto do `<select>`.
+   */
+  async function escolherNoDropdownVisivel(modal, campo, alvoOpcao, alvoValor) {
+    try {
+      if (!campo || !document.contains(campo)) return false;
+
+      const bloco =
+        (campo.closest &&
+          campo.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset')) ||
+        campo.parentElement;
+      if (!bloco) return false;
+
+      const gatilho = queryAllProfundo(
+        'button, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
+        bloco
+      ).filter((el) => el !== campo && isVisible(el) && !el.disabled)[0];
+      if (!gatilho) return false;
+
+      const alvo = normalizar(alvoOpcao || '');
+      if (!alvo) return false;
+
+      humanClick(gatilho);
+      await waitUntil(
+        () => opcoesDoCombo(modal, gatilho).length > 0,
+        Math.min(CONFIG.popupWaitMs, 2500)
+      );
+
+      const opcoes = opcoesDoCombo(modal, gatilho);
+      const escolhida =
+        opcoes.find((o) => normalizar(o.texto) === alvo) ||
+        opcoes.find((o) => normalizar(o.texto).indexOf(alvo) >= 0) ||
+        opcoes.find((o) => normalizar(o.value) === alvo);
+
+      if (!escolhida || !escolhida.el || !document.contains(escolhida.el)) return false;
+
+      humanClick(escolhida.el);
+      await humanPause(CONFIG.applyStepDelayMs);
+
+      /* Deu certo? O gatilho passou a mostrar a escolha, o `<select>` pegou o valor,
+       * ou a lista fechou (o LinkedIn fecha a lista quando registra a escolha). */
+      return (
+        comboTemValor(gatilho) ||
+        String(campo.value == null ? '' : campo.value) === String(alvoValor || '') ||
+        opcoesDoCombo(modal, gatilho).length === 0
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   async function aplicarRespostaNosCampos(modal, resposta) {
     if (!modal || !resposta || typeof resposta !== 'object') return 0;
 
     let aplicados = 0;
+
+    /* Quantas respostas vieram no cartão: a rede de segurança do fim do
+     * `buscarCampo` só vale quando é UMA (com duas ou mais, escrever no campo
+     * errado seria pior do que não escrever). */
+    const chaves = Object.keys(resposta).filter((k) => String(resposta[k] == null ? '' : resposta[k]));
 
     /* Aqui vale a MESMA regra da detecção: o LinkedIn ESCONDE o controle nativo
      * atrás do UI estilizado (o `<select>` do artdeco fica sem caixa). Se a
@@ -3584,6 +3643,34 @@
       )) {
         if (!pertenceAoFormulario(el, modal) || !visivelOuControle(el)) continue;
         if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
+      }
+
+      /* 5) ÚLTIMA rede: o cartão trouxe UMA resposta e há UM só controle de escolha
+       *    sem resposta no formulário. Aí não há como errar de campo — e é o que salva
+       *    a etapa quando o rótulo que o cartão mostrou não bate com o do LinkedIn
+       *    (texto montado por CSS, truncado, com o "Obrigatório" colado…).
+       *
+       *    Só com UMA resposta: com duas ou mais, escrever no campo errado seria pior
+       *    do que não escrever. E só numérico o bastante para ser seguro: se houver
+       *    mais de um candidato em aberto, não chuta. */
+      if (chaves.length === 1) {
+        const candidatos = queryAllProfundo(
+          'select, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded], input[readonly]',
+          modal
+        ).filter((el) => el !== null && visivelOuControle(el) && !el.disabled);
+
+        const semResposta = candidatos.filter((el) =>
+          ehCombo(el) ? !comboTemValor(el) : !jaRespondido(el)
+        );
+
+        if (semResposta.length === 1) {
+          console.log(
+            '[PegaVaga] o rotulo "' +
+              alvoPergunta +
+              '" nao bateu com nenhum campo; usando o unico campo de escolha sem resposta da etapa.'
+          );
+          return semResposta[0];
+        }
       }
 
       return null;
@@ -3702,6 +3789,13 @@
 
             if (String(campo.value) === alvoValor) {
               aplicados += 1;
+            } else if (await escolherNoDropdownVisivel(modal, campo, valor, alvoValor)) {
+              /* O `<select>` escondido não aceitou: quem manda é o UI VISÍVEL (o
+               * botão/combobox que o LinkedIn desenha por cima). */
+              console.log(
+                '[PegaVaga] o select "' + rotulo + '" foi respondido pelo dropdown visivel.'
+              );
+              aplicados += 1;
             } else {
               console.warn(
                 '[PegaVaga] o select "' +
@@ -3712,6 +3806,8 @@
                   diagnosticoDoCampo(campo)
               );
             }
+          } else if (await escolherNoDropdownVisivel(modal, campo, valor, '')) {
+            aplicados += 1;
           } else {
             console.warn(
               '[PegaVaga] a resposta "' +
