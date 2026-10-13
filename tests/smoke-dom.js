@@ -34,6 +34,7 @@ const { execFileSync } = require('child_process');
 
 const raiz = path.join(__dirname, '..');
 
+let pagina = ''; // o arquivo da página de teste (nasce no /tmp e é apagado no fim)
 let falhas = 0;
 let total = 0;
 
@@ -48,6 +49,12 @@ function ok(nome, cond, detalhe) {
 }
 
 function finalizar() {
+  try {
+    if (pagina) fs.rmSync(path.dirname(pagina), { recursive: true, force: true });
+  } catch (error) {
+    /* o /tmp se limpa sozinho */
+  }
+
   console.log(
     falhas
       ? '\n' + falhas + '/' + total + ' FALHARAM'
@@ -93,7 +100,7 @@ if (!chromium) {
 /* A página de teste: o formulário do LinkedIn + o chrome falso + o roteiro    */
 /* -------------------------------------------------------------------------- */
 
-const pagina = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pgv-dom-')), 'pagina.html');
+pagina = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pgv-dom-')), 'pagina.html');
 
 const html = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>PegaVaga - teste de DOM</title></head>
