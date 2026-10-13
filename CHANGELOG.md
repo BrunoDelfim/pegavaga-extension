@@ -17,6 +17,16 @@ da build).
 
 ### Adicionado
 
+- **Teste de DOM REAL** (`tests/smoke-dom.js` + `tests/dom-preenchimento.js`): monta
+  o formulário do Easy Apply como o LinkedIn entrega (o `<select>` sem caixa atrás
+  do UI do artdeco, rádio sem `name` com cada bolinha no seu container,
+  `role="radio"`) e roda o `content.js` num **Chromium de verdade**
+  (`chrome-headless-shell`), conferindo o que ENTROU no formulário — inclusive os
+  eventos (`input`/`change`/`blur`) e a hora de recarregar a página. É o teste que
+  pega a classe de bug que só aparece com LAYOUT (quem decide o que é "visível" é o
+  `getClientRects`, que só responde dentro de um browser). O browser vem de
+  `tools/baixar-chromium.sh` (uma vez, ~120 MB, sem root, sem npm); sem ele o teste
+  se pula sozinho e a suíte segue verde.
 - **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código
   está migrando de JavaScript para TypeScript **um arquivo por vez** — começou pelos
   menores e sem DOM (`src/edicoes.ts`, `src/shared.ts`) e chegou ao service worker
@@ -236,6 +246,24 @@ da build).
 
 ### Corrigido
 
+- **O PREENCHIMENTO dos campos (rádio, select e texto) não acontecia por um erro de
+  seletor** (`queryAllUnique`): a função recebe a LISTA de seletores, e três chamadas
+  novas passavam uma **string** — `for (const s of 'input, select')` itera os
+  CARACTERES, e no `','` o `querySelectorAll` estoura
+  (`SyntaxError: ',' is not a valid selector`). Com isso a busca do campo morria em
+  **todos** os campos (o `try` da busca engolia o erro, com um
+  `falha ao localizar o campo "…"` no console) e a extensão não escrevia NADA —
+  era o "o select não preenche" e, depois, "nenhuma resposta do cartão pode ser
+  escrita no formulário". Agora `queryAllUnique` aceita string OU lista (string =
+  um seletor) e um seletor inválido não derruba os outros.
+- **A página não é mais recarregada no meio do fluxo** (`podeRecarregar`): a troca
+  de termo (que NAVEGA para o próximo termo) agora ESPERA quando há formulário de
+  candidatura aberto na tela ou quando você está mexendo na página. Recarregar por
+  cima de um formulário em preenchimento perdia o que estava respondido (e o que
+  você tinha digitado, no "vou preencher à mão"). A fila fica salva como está e a
+  navegação acontece quando o modal fechar.
+- **`falha ao localizar o campo "…"` agora diz QUAL erro** (nome e mensagem, não
+  `[object DOMException]`): é esse log que aponta o seletor quebrado no console.
 - **O rádio CUSTOM (`role="radio"`) passou a ser lido** (`opcoesDeRadioCustom`): o
   artdeco não usa `<input type=radio>` em todas as telas — as opções são
   div/botões com `role="radio"` dentro de um `radiogroup`/`fieldset`. Nada lia

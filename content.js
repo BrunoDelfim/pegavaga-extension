@@ -364,11 +364,30 @@
     return null;
   }
 
+  /**
+   * Todos os elementos que casam com QUALQUER um dos seletores, sem repetir.
+   *
+   * Aceita um ARRAY de seletores — e também uma STRING, tratada como UM seletor.
+   *
+   * A tolerância não é preguiça: passar string onde se espera array é uma
+   * armadilha silenciosa. `for (const s of 'input, select')` itera os CARACTERES
+   * ('i', 'n', 'p'…) e, no `','`, o `querySelectorAll` estoura
+   * (`SyntaxError: ',' is not a valid selector`) — e como a busca do campo inteira
+   * mora num `try`, o efeito era NENHUM campo ser preenchido, com o erro só no
+   * console. Foi esse o "o select não preenche" e, depois, "nada é escrito".
+   */
   function queryAllUnique(selectors, root = document) {
+    const lista = Array.isArray(selectors) ? selectors : [selectors];
     const found = new Set();
-    for (const selector of selectors) {
-      root.querySelectorAll(selector).forEach((el) => found.add(el));
+
+    for (const selector of lista) {
+      try {
+        root.querySelectorAll(selector).forEach((el) => found.add(el));
+      } catch (error) {
+        /* seletor inválido: os outros ainda valem (a varredura não pode morrer) */
+      }
     }
+
     return Array.from(found);
   }
 
@@ -2278,7 +2297,12 @@
       }
 
       for (const el of queryAllUnique(
-        'input[required], select[required], textarea[required], [aria-required="true"]',
+        [
+          'input[required]',
+          'select[required]',
+          'textarea[required]',
+          '[aria-required="true"]',
+        ],
         modal
       )) {
         if (vistos.length >= TETO) break;
@@ -3597,7 +3621,14 @@
       }
 
       for (const el of queryAllUnique(
-        'input, select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
+        [
+          'input',
+          'select',
+          'textarea',
+          '[role="combobox"]',
+          '[aria-haspopup="listbox"]',
+          '[aria-expanded]',
+        ],
         modal
       )) {
         if (!visivelOuControle(el)) continue;
@@ -3613,7 +3644,7 @@
        *    resposta ia para o campo ERRADO: o select do LinkedIn continuava vazio e
        *    o cartão voltava a pedir, num vaivém. */
       for (const bloco of queryAllUnique(
-        '.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset',
+        ['.fb-dash-form-element', '.jobs-easy-apply-form-element', 'fieldset'],
         modal
       )) {
         if (!isVisible(bloco)) continue;
@@ -3695,8 +3726,12 @@
         campo = buscarCampo(alvoPergunta);
       } catch (erroDeBusca) {
         console.error(
-          '[PegaVaga] falha ao localizar o campo "' + rotulo + '" (seguindo):',
-          erroDeBusca
+          '[PegaVaga] falha ao localizar o campo "' +
+            rotulo +
+            '" (seguindo): ' +
+            ((erroDeBusca && erroDeBusca.name) || 'erro') +
+            ': ' +
+            ((erroDeBusca && erroDeBusca.message) || erroDeBusca)
         );
         continue;
       }
@@ -5107,6 +5142,35 @@
   }
 
   /**
+   * Dá para RECARREGAR a página (trocar de termo) AGORA?
+   *
+   * Não, se houver formulário de candidatura aberto na tela: navegar por cima dele
+   * perde o que estava preenchido — e, se o formulário é SEU (o "vou preencher à
+   * mão"), perde o que você digitou. Era esse o recarregamento no meio do fluxo.
+   * Também não, se você estiver mexendo na página (`userBusy`).
+   */
+  function podeRecarregar() {
+    if (state.userBusy) return false;
+
+    const modal = queryFirst(APPLY_SEL.dialog);
+    if (modal && isVisible(modal)) return false;
+
+    return true;
+  }
+
+  /** Espera o formulário fechar (ou você parar de mexer) para poder navegar. */
+  async function esperarPoderRecarregar(limiteMs) {
+    const fim = Date.now() + (limiteMs || CONFIG.userBusyPauseMs);
+
+    while (Date.now() < fim) {
+      if (podeRecarregar()) return true;
+      await humanPause(CONFIG.applyModalPollMs);
+    }
+
+    return false;
+  }
+
+  /**
    * Avança para o próximo termo da fila (ou encerra). O storage é a fonte da
    * verdade: se o pop-up removeu a fila (botão Parar), paramos aqui mesmo.
    *
@@ -5115,6 +5179,30 @@
    * termo batido.
    */
   async function advanceRun(motivo) {
+    /* Formulário aberto: a troca de termo ESPERA. Recarregar por cima de um
+     * formulário em preenchimento era o "recarrega a página no meio do fluxo" —
+     * e o LinkedIn nem sempre avisa antes. A fila fica como está (nada foi
+     * gravado ainda), então nada se perde: quando o modal fechar, a troca de termo
+     * acontece (e, se não fechar, ela fica para a próxima passada). */
+    if (!podeRecarregar()) {
+      console.log(
+        '[PegaVaga] formulario aberto: a troca de termo espera o formulario fechar (a fila esta salva).'
+      );
+
+      esperarPoderRecarregar().then((liberou) => {
+        if (liberou && !state.scanning) {
+          advanceRun(motivo).catch(() => {});
+          return;
+        }
+
+        console.log(
+          '[PegaVaga] o formulario continuou aberto: a troca de termo fica para a proxima passada.'
+        );
+      });
+
+      return;
+    }
+
     const run = await getRun();
 
     if (!run || run.running !== true) {
@@ -5750,6 +5838,31 @@
 
     return false; // todas as respostas são síncronas
   });
+
+  /* ------------------------------------------------------------------------ */
+  /* Gancho de TESTE (não existe no LinkedIn)                                  */
+  /* ------------------------------------------------------------------------ */
+  //
+  // `tests/smoke-dom.js` roda este arquivo num Chromium DE VERDADE (via
+  // `tools/baixar-chromium.sh` + `chrome-headless-shell`) e precisa chamar as
+  // funções daqui de dentro: a página de teste define `window.__pgvTeste` ANTES de
+  // carregar este script e, só nesse caso, o gancho é publicado. No LinkedIn a
+  // variável não existe — nada é exposto na página de produção.
+  if (window.__pgvTeste) {
+    window.__pgvTeste = {
+      aplicarRespostaNosCampos: aplicarRespostaNosCampos,
+      camposTravados: camposTravados,
+      camposTravadosCompletos: camposTravadosCompletos,
+      descreverCampo: descreverCampo,
+      rotuloDaPerguntaDoGrupo: rotuloDaPerguntaDoGrupo,
+      rotuloDaOpcao: rotuloDaOpcao,
+      opcoesDoGrupo: opcoesDoGrupo,
+      fieldLabel: fieldLabel,
+      isVisible: isVisible,
+      diagnosticoDoCampo: diagnosticoDoCampo,
+      podeRecarregar: podeRecarregar,
+    };
+  }
 
   /* ------------------------------------------------------------------------ */
   /* Inicialização                                                             */
