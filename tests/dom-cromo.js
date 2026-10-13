@@ -97,6 +97,14 @@ const CHROME_FALSO = `
   var dados = window.__pgvDados || {};
   var ouvintes = [];
 
+  /* A janela da extensão (uma só): o estado e o histórico de atualizações. É o que
+   * permite conferir, no teste, onde a janelinha se posicionou e de que tamanho
+   * ficou. */
+  window.__pgvJanela = {
+    janela: { id: 1, left: 0, top: 0, width: 372, height: 470 },
+    atualizacoes: [],
+  };
+
   window.chrome = {
     storage: {
       local: {
@@ -143,15 +151,24 @@ const CHROME_FALSO = `
       onMessage: { addListener: function (fn) { ouvintes.push(fn); } }
     },
     windows: {
-      // A janelinha usa isto para se posicionar e para arrastar (o cartão move a
-      // janela). Sem a API aqui, o teste perderia o resto do iniciar().
+      // A janelinha usa isto para se posicionar, arrastar e ajustar a ALTURA (o
+      // cartão cresce com os campos). Sem a API aqui, o teste perderia o resto do
+      // iniciar(). O window.__pgvJanela guarda o estado e o histórico: é assim
+      // que o roteiro confere onde e de que tamanho a janela ficou.
       getCurrent: function (cb) {
-        var janela = { id: 1, left: 0, top: 0, width: 400, height: 520 };
+        var janela = window.__pgvJanela.janela;
+        if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
+        return Promise.resolve(janela);
+      },
+      get: function (id, cb) {
+        var janela = window.__pgvJanela.janela;
         if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
         return Promise.resolve(janela);
       },
       update: function (id, info, cb) {
-        var janela = Object.assign({ id: id }, info || {});
+        var janela = Object.assign({}, window.__pgvJanela.janela, info || {}, { id: id });
+        window.__pgvJanela.janela = janela;
+        window.__pgvJanela.atualizacoes.push(info || {});
         if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
         return Promise.resolve(janela);
       }
@@ -344,6 +361,9 @@ function rodar(orcamentoMs, consulta) {
       '--no-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
+      // Tela fixa: a janelinha calcula o canto inferior direito pelo `screen`, e o
+      // teste precisa do MESMO número que ela.
+      '--window-size=1024,768',
       // Sem isto, cada `file://` é origem própria e o Chrome esconde o erro dos
       // scripts carregados (só "Script error."): com a permissão, o teste enxerga a
       // exceção de verdade.

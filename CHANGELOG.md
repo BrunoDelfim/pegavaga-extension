@@ -189,6 +189,17 @@ da build).
 
 ### Alterado
 
+- **A janelinha virou um popup de verdade**: **largura fixa** (372) e **altura que
+  acompanha o conteúdo** — um campo só deixa a janela baixinha (o mínimo é um campo
+  mais as margens), vários a esticam até o teto (o tamanho de antes); passando do
+  teto, quem rola é o corpo do cartão (`ajustarAltura`). Sem cantos arredondados nem
+  sombra: a moldura agora é a da janela. E ela abre **já na posição guardada** — o
+  worker lê `pegavaga_ajuda_pos` antes de criar a janela (o service worker não tem
+  `screen`, então o canto inferior direito da primeira vez continua sendo do
+  `ajuda.js`, que também arrasta e memoriza). O que o Chrome **não** oferece é
+  "sempre acima das outras" (é do gerenciador de janelas): o mais perto é abrir com
+  foco e atenção, mais o aviso do desktop, que aparece por cima de tudo.
+
 - **O administrador já entra Premium** — o plano dele passou a vir do PAPEL, como já
   vinha o painel: quem administra precisa poder usar o que administra, e exigir
   licença do admin só fazia ele ver a tela do free e perguntar por quê. O

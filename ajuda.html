@@ -14,25 +14,23 @@
     html, body {
       margin: 0;
       padding: 0;
-      height: 100%;
-      overflow: hidden;
-      background: transparent; /* só o cartão aparece: a janela é "sem borda" */
+      background: #fff; /* qualquer folga da janela parece parte do cartão */
       color-scheme: light; /* o modo escuro do Chrome não pinta os campos de escuro */
     }
     body {
       font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
       color: #1f2933;
+      overflow: hidden;
       -webkit-user-select: none;
       user-select: none;
     }
+    /* A moldura é da JANELA (barra de título + borda); o cartão só ocupa o que
+     * precisa. A altura da janela acompanha o conteúdo (ver `ajustarAltura` no
+     * ajuda.js): poucos campos = janela baixinha; muitos = até o teto, e aí quem
+     * rola é o corpo. */
     #cartao {
       display: flex;
       flex-direction: column;
-      height: 100%;
-      background: #fff;
-      border-radius: 12px 12px 0 0;
-      box-shadow: 0 10px 34px rgba(15, 23, 42, .28);
-      overflow: hidden;
     }
     .cabeca {
       display: flex;
@@ -54,7 +52,7 @@
       cursor: pointer;
       padding: 0 2px;
     }
-    .corpo { padding: 12px; flex: 1; overflow: auto; }
+    .corpo { padding: 12px; overflow-y: auto; } /* o max-height vem do ajuda.js */
     .vaga {
       margin: 0 0 8px;
       font-size: 12px;

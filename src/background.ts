@@ -275,6 +275,23 @@ importScripts('shared.js');
     );
     const url = chrome.runtime.getURL('ajuda.html') + '?dados=' + contexto;
 
+    /* Onde a janelinha foi deixada da última vez (o ajuda.js guarda ao arrastar):
+     * abrir JÁ ali evita o pulo do meio da tela para o canto. Sem posição guardada,
+     * quem a leva para o canto inferior direito é o próprio ajuda.js — ele é quem
+     * enxerga o `screen` (o service worker não tem essa API). */
+    let posicao: { left: number; top: number } | null = null;
+
+    try {
+      const guardado = await chrome.storage.local.get(STORAGE.pos);
+      const salva = guardado && (guardado[STORAGE.pos] as { left?: unknown; top?: unknown } | undefined);
+
+      if (salva && Number.isFinite(salva.left) && Number.isFinite(salva.top)) {
+        posicao = { left: Number(salva.left), top: Number(salva.top) };
+      }
+    } catch (error) {
+      posicao = null;
+    }
+
     /* A janela PEDIDA é a `popup`: sem barra de endereço, sem abas, sem menu —
      * só a barra de título e a borda do sistema, o mais capado que o Chrome
      * oferece. Tentamos na ordem do mais "capado" para o menos:
@@ -286,9 +303,12 @@ importScripts('shared.js');
      * O que falhou fica em `recusa` e volta na resposta (`{ ok: true, recusa }`):
      * é o que permite ver no console POR QUE a `popup` não saiu, sem adivinhar. */
     const tentativas: chrome.windows.CreateData[] = [
-      { url: url, type: 'popup', width: 372, height: 470, focused: true },
-      { url: url, type: 'popup', width: 372, height: 470, focused: true, setSelfAsOpener: true },
-      { url: url, width: 372, height: 470, focused: true },
+      Object.assign({ url: url, type: 'popup', width: 372, height: 470, focused: true }, posicao || {}),
+      Object.assign(
+        { url: url, type: 'popup', width: 372, height: 470, focused: true, setSelfAsOpener: true },
+        posicao || {}
+      ),
+      Object.assign({ url: url, width: 372, height: 470, focused: true }, posicao || {}),
     ];
 
     let janela: chrome.windows.Window | undefined;

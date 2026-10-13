@@ -44,16 +44,28 @@ const dados = {
   ],
 };
 
-C.montarPagina({
-  arquivoHtml: 'ajuda.html',
-  query: 'dados=' + encodeURIComponent(JSON.stringify(dados)),
-  scripts: ['tests/dom-janelinha.js'],
-});
+/* Dois cenários, porque a janela é a mesma e o que muda é o que está guardado:
+ *   1. primeira abertura (sem posição): tem de ir para o canto inferior direito;
+ *   2. com posição memorizada: tem de abrir ONDE você a deixou. */
+for (const guardada of [null, { left: 40, top: 60 }]) {
+  const contexto = Object.assign({}, dados, guardada ? { pegavaga_ajuda_pos: guardada } : {});
 
-const dom = C.rodar(30000);
+  C.montarPagina({
+    arquivoHtml: 'ajuda.html',
+    query: 'dados=' + encodeURIComponent(JSON.stringify(contexto)),
+    // `dados` é o STORAGE do teste (o harness); o `query` é o contexto que a
+    // própria janelinha lê da URL. A posição guardada vive no storage.
+    dados: contexto,
+    scripts: ['tests/dom-janelinha.js'],
+  });
 
-if (!dom) C.pular();
+  const dom = C.rodar(30000);
 
-C.reportar(dom);
-C.mostrarLogs(dom);
+  if (!dom) C.pular();
+
+  console.log('== janelinha ' + (guardada ? 'com posicao guardada' : 'primeira abertura') + ' ==');
+  C.reportar(dom);
+  C.mostrarLogs(dom);
+}
+
 C.finalizar('Todos os %d testes da janelinha (DOM real) passaram.');

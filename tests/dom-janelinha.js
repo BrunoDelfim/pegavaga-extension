@@ -81,6 +81,74 @@
         resposta['Qual é o seu nível de inglês?'] === 'Avançado',
       JSON.stringify(resposta)
     );
+
+    /* ---------------------------------------------------------------------- */
+    /* A JANELA: altura do conteúdo, canto inferior direito e posição guardada */
+    /* ---------------------------------------------------------------------- */
+
+    const janela = window.__pgvJanela.janela;
+    const cartao = document.getElementById('cartao');
+    const alturaConteudo = Math.ceil(cartao.getBoundingClientRect().height);
+    const guardadaAntes = (window.__pgvDados || {}).pegavaga_ajuda_pos;
+
+    ok(
+      'a janela nao tem altura fixa: ela acompanha o conteudo (min 176, max 470)',
+      janela.height >= 176 && janela.height <= 470 && janela.height >= alturaConteudo,
+      'altura=' + janela.height + ' conteudo=' + alturaConteudo
+    );
+
+    const MARGEM = 16;
+
+    if (guardadaAntes) {
+      ok(
+        'abriu na posicao MEMORIZADA',
+        janela.left === guardadaAntes.left && janela.top === guardadaAntes.top,
+        'em=' + janela.left + ',' + janela.top + ' guardado=' + JSON.stringify(guardadaAntes)
+      );
+    } else {
+      const esperadoLeft = screen.availLeft + screen.availWidth - (janela.width || 372) - MARGEM;
+      const esperadoTop = screen.availTop + screen.availHeight - janela.height - MARGEM;
+
+      ok(
+        'na primeira abertura vai para o CANTO INFERIOR DIREITO',
+        janela.left === esperadoLeft && janela.top === esperadoTop,
+        'em=' + janela.left + ',' + janela.top + ' esperado=' + esperadoLeft + ',' + esperadoTop
+      );
+    }
+
+    /* Arrastar tem de MEMORIZAR: é o que faz a próxima vaga abrir onde você deixou. */
+    const antesDoArrasto = { left: janela.left, top: janela.top };
+    const cabeca = document.getElementById('cabeca');
+
+    const rato = (tipo, alvo, x, y) => {
+      alvo.dispatchEvent(
+        new MouseEvent(tipo, { bubbles: true, cancelable: true, button: 0, screenX: x, screenY: y })
+      );
+    };
+
+    const respirar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    await respirar(60); // o id da janela chega no primeiro tick
+    rato('mousedown', cabeca, 100, 100);
+    await respirar(60); // a posição base vem do chrome.windows.get
+    rato('mousemove', document, 140, 130);
+    rato('mouseup', document, 140, 130);
+
+    const chavePos =
+      (window.PegaVagaShared &&
+        window.PegaVagaShared.STORAGE &&
+        window.PegaVagaShared.STORAGE.pos) ||
+      'pegavaga_ajuda_pos';
+
+    await esperar(() => Boolean(window.__pgvDados[chavePos]), 3000);
+
+    const guardada = window.__pgvDados[chavePos] || {};
+
+    ok(
+      'arrastar MEMORIZA a posicao para a proxima abertura',
+      guardada.left === antesDoArrasto.left + 40 && guardada.top === antesDoArrasto.top + 30,
+      JSON.stringify(guardada) + ' antes=' + JSON.stringify(antesDoArrasto)
+    );
   } catch (erro) {
     ok('o roteiro rodou ate o fim', false, (erro && erro.message) || String(erro));
   }

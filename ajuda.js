@@ -18,7 +18,11 @@
     AJUDA_RESPOSTA_JANELA: 'PEGAVAGA_AJUDA_RESPOSTA_JANELA',
   };
 
-  const POS_KEY = 'pegavaga_ajuda_pos';
+  const POS_KEY =
+    (globalThis.PegaVagaShared &&
+      globalThis.PegaVagaShared.STORAGE &&
+      globalThis.PegaVagaShared.STORAGE.pos) ||
+    'pegavaga_ajuda_pos';
   const MARGEM = 16; // distância do canto do desktop
 
   /* O contexto que o worker mandou na URL: { avisoId, motivo, titulo, empresa,
@@ -58,6 +62,83 @@
   /** Guarda a posição para a próxima abertura (sem atrapalhar se falhar). */
   function guardarPosicao(left, top) {
     chrome.storage.local.set({ [POS_KEY]: { left: left, top: top } }).catch(() => {});
+  }
+
+  /* A janela: LARGURA fixa e ALTURA que acompanha o conteúdo — um campo só deixa a
+   * janela baixinha (o mínimo é um campo mais as margens), vários a esticam até o
+   * teto; passando do teto, quem rola é o corpo do cartão. Os números batem com os
+   * do `windows.create` no background. */
+  const ALTURA_MIN = 176;
+  const ALTURA_MAX = 470;
+  let alturaAtual = 0;
+  let janelaAtual = null;
+
+  /** O id da janela desta página (o que o `chrome.windows.update` precisa). */
+  async function acharJanela() {
+    if (janelaAtual != null) return janelaAtual;
+
+    try {
+      const janela = await chrome.windows.getCurrent();
+      janelaAtual = janela && janela.id != null ? janela.id : null;
+    } catch (error) {
+      janelaAtual = null;
+    }
+
+    return janelaAtual;
+  }
+
+  /**
+   * Deixa a janela do tamanho do conteúdo.
+   *
+   * Mede o que a PÁGINA ocupa (o cartão já está com o `max-height` do corpo
+   * aplicado, então o que passa do teto não conta) e soma a moldura da janela —
+   * barra de título e borda, que só existem para fora da página.
+   */
+  async function ajustarAltura() {
+    if (!chrome.windows || typeof chrome.windows.update !== 'function') return;
+
+    const cartao = document.getElementById('cartao');
+    const corpo = document.querySelector('.corpo');
+    if (!cartao || !corpo) return;
+
+    const id = await acharJanela();
+    if (id == null) return;
+
+    const moldura = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+    const fora = Math.ceil(cartao.getBoundingClientRect().height - corpo.getBoundingClientRect().height);
+    const tetoDoCorpo = Math.max(60, ALTURA_MAX - moldura - fora);
+
+    corpo.style.maxHeight = tetoDoCorpo + 'px';
+
+    const conteudo = Math.ceil(cartao.getBoundingClientRect().height);
+    const altura = Math.max(ALTURA_MIN, Math.min(ALTURA_MAX, conteudo + moldura));
+
+    if (altura === alturaAtual) return;
+    alturaAtual = altura;
+
+    try {
+      await chrome.windows.update(id, { height: altura });
+    } catch (error) {
+      /* o sistema pode recusar redimensionar: o corpo rola dentro da janela que veio */
+    }
+  }
+
+  /**
+   * Traz a janela para a frente.
+   *
+   * "Sempre acima das outras" NÃO existe na API do Chrome (é coisa do gerenciador
+   * de janelas do sistema): o mais perto é pedir foco e atenção ao abrir — e o
+   * aviso do desktop, que aparece por cima de tudo, continua valendo.
+   */
+  async function trazerParaFrente() {
+    const id = await acharJanela();
+    if (id == null) return;
+
+    try {
+      await chrome.windows.update(id, { focused: true, drawAttention: true });
+    } catch (error) {
+      /* sem foco: o cartão continua aberto e o aviso do desktop também */
+    }
   }
 
   /** A posição guardada ainda cabe na tela de agora? (monitor pode ter mudado.) */
@@ -260,7 +341,7 @@
     setTimeout(() => window.close(), 400);
   }
 
-  function iniciar() {
+  async function iniciar() {
     /* Cabeçalho: a vaga e o recado. */
     const vaga = [dados.titulo, dados.empresa].filter(Boolean).join(' — ');
     const elVaga = document.getElementById('vaga');
@@ -283,9 +364,13 @@
         'Não consegui ler o campo travado. Assuma à mão ou pule esta vaga.';
     }
 
-    /* Posiciona a janela e deixa o cabeçalho arrastável. */
-    posicionar();
+    /* Altura PRIMEIRO (a janela cresce/encolhe com o conteúdo) e só depois a
+     * posição: o canto inferior direito é calculado com a altura final, senão a
+     * janela baixinha ficaria flutuando no meio da tela. */
+    await ajustarAltura();
+    await posicionar();
     permitirArrastar();
+    await trazerParaFrente();
 
     /* Botões. */
     const lerResposta = () => {
@@ -318,6 +403,6 @@
     if (controles.length && controles[0].el) controles[0].el.focus();
   }
 
-  iniciar();
+  iniciar().catch(() => {});
 })();
 

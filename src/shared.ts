@@ -280,6 +280,9 @@ var apiShared = (() => {
     sessao: 'pegavaga_sessao', // { token, email, papel, expiraEm } — a credencial
     perfil: 'pegavaga_perfil', // { perfil, salvoEm } — cache do último /plano
     api: 'pegavaga_api', // endereço do backend (vazio = o padrão de desenvolvimento)
+    /* { left, top } — onde a JANELINHA do pedido de ajuda foi deixada da última
+     * vez (o ajuda.js guarda ao arrastar e usa na próxima abertura). */
+    pos: 'pegavaga_ajuda_pos',
   };
 
   /* Tipos de mensagem trocadas entre pop-up, content script e agendador. */
