@@ -328,15 +328,34 @@ function respostaPremium(email) {
 
 function respostaAdmin(email) {
   return {
-    plano: 'free',
-    rotulo: 'Free',
-    estado: 'sem_assinatura',
+    // O plano do administrador vem do PAPEL, não de licença nenhuma (é o que o
+    // servidor faz em `_como_admin`): premium, com estado próprio e sem prazo.
+    plano: 'premium',
+    rotulo: 'Premium',
+    estado: 'admin',
     expiresAt: null,
-    features: Object.assign({}, FEATURES_FREE, { painelAdmin: true }),
-    limites: Object.assign({}, LIMITES_FREE),
+    features: Object.assign({}, FEATURES_PREMIUM, { painelAdmin: true }),
+    limites: Object.assign({}, LIMITES_PREMIUM),
     conta: { email: email, papel: 'admin' },
     token: 'token-de-admin',
   };
+}
+
+/**
+ * Um token no MESMO formato do servidor (JWT: `cabecalho.corpo.assinatura`, em
+ * base64url) com o `exp` que o teste quiser. A assinatura não vale nada — a
+ * extensão só LÊ o `exp` daqui para saber a hora de se deslogar; quem confere a
+ * assinatura é o servidor, a cada pedido.
+ */
+function tokenComExp(expSegundos) {
+  const parte = (objeto) =>
+    Buffer.from(JSON.stringify(objeto))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+  return parte({ alg: 'HS256', typ: 'JWT' }) + '.' + parte({ sub: 'x', exp: expSegundos }) + '.assinatura';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -429,6 +448,18 @@ async function principal() {
     respostaPremium((pedido && pedido.email) || 'novo@exemplo.com')
   );
   responder('/plano', respostaPremium('cliente@exemplo.com'));
+
+  // O "banco" das configurações por conta, do lado do servidor de mentira: o
+  // backend guarda por conta; aqui basta uma caixa só para o teste conferir o
+  // GET/POST e o que sobe.
+  const configRemota = { dados: null };
+  responder('/conta/config', ({ metodo, corpo }) => {
+    if (metodo === 'POST') {
+      configRemota.dados = (corpo && corpo.config) || {};
+      return { config: configRemota.dados };
+    }
+    return { config: configRemota.dados || {} };
+  });
 
   // Uma vaga capturada: sem ela o botão de exportar fica desabilitado por não ter
   // o que exportar, e o teste não conseguiria ver a diferença entre as edições.
@@ -533,8 +564,14 @@ async function principal() {
   );
   ok(
     'mandou e-mail e senha',
-    Boolean(ultima().corpo) && ultima().corpo.email === 'cliente@exemplo.com',
-    JSON.stringify(ultima().corpo)
+    Boolean(pedido('POST', '/conta/login').corpo) &&
+      pedido('POST', '/conta/login').corpo.email === 'cliente@exemplo.com',
+    JSON.stringify(pedido('POST', '/conta/login').corpo)
+  );
+  ok(
+    'ao entrar, foi buscar as configuracoes no banco',
+    chamou('GET', '/conta/config'),
+    JSON.stringify(chamadas.map((chamada) => chamada.caminho))
   );
   ok(
     'a sessao foi para o storage',
@@ -663,6 +700,9 @@ async function principal() {
     el('btn-conta').className
   );
   ok('admin: o menu oferece o painel de administracao', el('btn-menu-admin').hidden === false);
+  // O painel é do papel e o plano também: o admin não precisa de licença para ser
+  // premium (ver `_como_admin` no servidor).
+  ok('admin: ja entra Premium, sem licenca', S.temFeature('export') === true);
 
   // O caminho do usuário: avatar → "Painel de administração".
   limparChamadas();
@@ -693,6 +733,42 @@ async function principal() {
     'admin: a lista mostra a licenca',
     itensDaLicenca().join(' | ').includes('PGV-CLIENTE-0001'),
     itensDaLicenca().join(' | ')
+  );
+  // O campo vem com o endereço EM VIGOR (não com o que está guardado, que pode não
+  // existir): um campo vazio não diria para onde a extensão fala.
+  ok(
+    'admin: o campo da API vem preenchido com o endereco padrao',
+    el('adm-api').value === 'http://127.0.0.1:8787',
+    el('adm-api').value
+  );
+  ok(
+    'admin: e veio do padrao, nao de algo ja guardado',
+    armazem.has('pegavaga_api') === false,
+    String(armazem.get('pegavaga_api'))
+  );
+
+  console.log('== TROCAR O ENDERECO DA API ==');
+  responder('/plano', respostaAdmin('admin@exemplo.com'));
+  el('adm-api').value = 'http://127.0.0.1:8787/';
+  el('adm-api').disparar('change');
+  await respirar(25);
+
+  // O endereço digitado é o que fica guardado — quem normaliza (tira a barra do
+  // fim) é a leitura, e é o valor normalizado que o campo volta a mostrar.
+  ok(
+    'guardou o endereco que foi digitado',
+    armazem.get('pegavaga_api') === 'http://127.0.0.1:8787/',
+    String(armazem.get('pegavaga_api'))
+  );
+  ok(
+    'e o campo volta normalizado, com o endereco em vigor',
+    el('adm-api').value === 'http://127.0.0.1:8787',
+    el('adm-api').value
+  );
+  ok(
+    'e reconsultou o plano no endereco novo',
+    chamou('GET', '/plano'),
+    JSON.stringify(chamadas.map((chamada) => chamada.caminho))
   );
 
   console.log('== EMITIR LICENCA ==');
@@ -746,6 +822,16 @@ async function principal() {
   );
 
   console.log('== "VER A TELA COMO" (simulacao vinda do servidor) ==');
+  // Uma configuração de verdade no storage ANTES de simular: assim "não gravou"
+  // compara com algo que existia, e não com `undefined` dos dois lados.
+  armazem.set(
+    S.STORAGE.settings,
+    Object.assign({}, S.DEFAULT_SETTINGS, {
+      terms: ['react', 'node.js', 'vue', 'svelte'],
+      apply: Object.assign({}, S.DEFAULT_SETTINGS.apply, { perTerm: 10 }),
+    })
+  );
+  await globalThis.loadSettingsToForm();
   responder('/plano?simular=free', {
     plano: 'free',
     rotulo: 'Free',
@@ -770,23 +856,184 @@ async function principal() {
     el('build-info').textContent.includes('edição Free'),
     el('build-info').textContent
   );
+  // A marca da simulação: o admin JÁ é premium, então "edição Free" sozinho
+  // pareceria que o plano dele caiu. É esta marca que ele passa a ver.
+  ok(
+    'e o selo avisa que e simulacao',
+    el('build-info').textContent.includes('(simulação)'),
+    el('build-info').textContent
+  );
+  ok(
+    'com a marca propria no selo',
+    el('build-info').className.includes('simulado'),
+    el('build-info').className
+  );
+  ok('as funcoes do premium saem da tela', S.temFeature('export') === false);
+  ok('o botao de exportar fica desabilitado', el('btn-export').disabled === true);
+  ok('o painel do admin NAO some (o papel vem da sessao)', el('admin-panel').hidden === false);
+  // A tela foi refeita POR INTEIRO, e não só o selo: com o perfil do free ativo, os
+  // 4 termos que estavam no formulário viram 2 (o limite da edição) e o menu do
+  // avatar passa a dizer o plano novo. É isto que faz a simulação "funcionar" —
+  // trocar o perfil e desenhar de novo tudo o que depende dele.
+  ok(
+    'e o formulario foi refeito: 4 termos viram 2 (limite do Free)',
+    el('terms-queue').textContent.includes('2 termos'),
+    el('terms-queue').textContent
+  );
+  ok(
+    'e o menu do avatar passa a dizer Free',
+    el('menu-plano').textContent.includes('Free'),
+    el('menu-plano').textContent
+  );
   ok(
     'a simulacao NAO sobrescreveu o cache',
     armazem.get('pegavaga_perfil').perfil.features.painelAdmin === true,
     JSON.stringify(armazem.get('pegavaga_perfil').perfil.features)
   );
 
-  console.log('== O PLANO DE VERDADE VOLTA ==');
+  console.log('== SIMULANDO, AS CONFIGURACOES NAO SAO GRAVADAS ==');
+  const configAntes = JSON.stringify(armazem.get('pegavaga_settings'));
+  el('terms').value = 'analista de dados';
+  el('terms').disparar('input');
+  await new Promise((resolve) => setTimeout(resolve, 520)); // o auto-save espera 400 ms
+  await respirar(25);
+
+  ok(
+    'simulando: o que esta gravado nao mudou',
+    JSON.stringify(armazem.get('pegavaga_settings')) === configAntes,
+    JSON.stringify((armazem.get('pegavaga_settings') || {}).terms)
+  );
+  ok(
+    'simulando: a tela diz por que nao salva',
+    el('settings-hint').textContent.includes('simulad'),
+    el('settings-hint').textContent
+  );
+
+  console.log('== "VER A TELA COMO PREMIUM" (o outro lado do botao) ==');
+  responder('/plano?simular=premium', {
+    plano: 'premium',
+    rotulo: 'Premium',
+    estado: 'simulado',
+    simulado: true,
+    expiresAt: null,
+    features: Object.assign({}, FEATURES_PREMIUM),
+    limites: Object.assign({}, LIMITES_PREMIUM),
+  });
+
+  limparChamadas();
+  el('btn-simular-premium').disparar('click');
+  await respirar(25);
+
+  ok(
+    'pediu a simulacao do premium ao servidor',
+    chamou('GET', '/plano?simular=premium'),
+    JSON.stringify(chamadas.map((chamada) => chamada.caminho))
+  );
+  ok('o premium volta para a tela', S.temFeature('export') === true);
+  ok(
+    'e o selo continua dizendo que e simulacao',
+    el('build-info').textContent.includes('edição Premium (simulação)'),
+    el('build-info').textContent
+  );
+  ok('o painel do admin continua ali', el('admin-panel').hidden === false);
+
+  console.log('== "MEU PLANO" DESFAZ A SIMULACAO ==');
   responder('/plano', respostaAdmin('admin@exemplo.com'));
+  limparChamadas();
+  el('btn-simular-real').disparar('click');
+  await respirar(25);
+
+  ok(
+    'pediu o plano de verdade ao servidor',
+    chamou('GET', '/plano'),
+    JSON.stringify(chamadas.map((chamada) => chamada.caminho))
+  );
+  ok('o premium esta de volta', S.temFeature('export') === true);
+  ok(
+    'o selo volta ao plano real, sem marca de simulacao',
+    el('build-info').textContent.includes('edição Premium') &&
+      el('build-info').textContent.includes('simulação') === false,
+    el('build-info').textContent
+  );
+  ok('o painel do admin continua ali', el('admin-panel').hidden === false);
+  ok(
+    'e a tela nao esta mais travando o salvamento',
+    el('settings-hint').textContent.includes('simulad') === false,
+    el('settings-hint').textContent
+  );
+
+  console.log('== FORA DA SIMULACAO, O AUTO-SAVE VOLTA A GRAVAR ==');
+  el('terms').value = 'analista de dados';
+  el('terms').disparar('input');
+  await new Promise((resolve) => setTimeout(resolve, 520));
+  await respirar(25);
+
+  ok(
+    'fora da simulacao: o termo digitado foi gravado',
+    ((armazem.get('pegavaga_settings') || {}).terms || []).includes('analista de dados'),
+    JSON.stringify((armazem.get('pegavaga_settings') || {}).terms)
+  );
+
+  // O papel de administrador NÃO pode sumir só porque o perfil caiu no free: o
+  // `/plano` pode não responder (ou o cache do perfil vencer) e a sessão — que o
+  // servidor assinou — continua com `papel: 'admin'`. Era daqui que vinha o
+  // "sumiu o painel, só voltando com sair e entrar".
+  console.log('== "MEU PLANO" SEM REDE (volta pelo cache) ==');
+  // Simula de novo (a rota continua registrada) e desfaz COM a rede fora: quem
+  // reaplica o último perfil concedido (o do cache, onde a simulação nunca é
+  // gravada) é o `sincronizarPlano` do shared — a tela volta ao plano real
+  // mesmo sem o servidor responder.
+  el('btn-simular-free').disparar('click');
+  await respirar(25);
+
+  redeFora = true;
+  limparChamadas();
+  el('btn-simular-real').disparar('click');
+  await respirar(25);
+  redeFora = false;
+
+  ok(
+    'sem rede: a marca de simulacao sai',
+    el('build-info').textContent.includes('simulação') === false,
+    el('build-info').textContent
+  );
+  ok('sem rede: o premium esta de volta (pelo cache)', S.temFeature('export') === true);
+  ok(
+    'e o aviso conta que usou o cache',
+    el('adm-status').textContent.includes('sem rede'),
+    el('adm-status').textContent
+  );
+
+  console.log('== PERFIL CAI NO FREE MAS A SESSAO AINDA E ADMIN ==');
+  responder('/plano', {
+    plano: 'free',
+    rotulo: 'Free',
+    estado: 'sem_assinatura',
+    expiresAt: null,
+    features: Object.assign({}, FEATURES_FREE, { painelAdmin: false }),
+    limites: Object.assign({}, LIMITES_FREE),
+    conta: { email: 'admin@exemplo.com', papel: 'admin' },
+  });
   await globalThis.sincronizarPerfil();
   await respirar(25);
 
-  ok('o painel do admin continua ali', el('admin-panel').hidden === false);
   ok(
-    'e o selo volta ao perfil real (admin nao tem assinatura)',
-    el('build-info').textContent.includes('edição Free'),
-    el('build-info').textContent
+    'sem painelAdmin no perfil, a feature do servidor fica off',
+    S.temFeature('painelAdmin') === false,
+    String(S.temFeature('painelAdmin'))
   );
+  ok(
+    'a sessao continua dizendo que e administrador',
+    el('conta-quem').textContent.includes('administrador'),
+    el('conta-quem').textContent
+  );
+  ok('o painel do admin NAO some (o papel vem da sessao)', el('admin-panel').hidden === false);
+  ok('e o menu ainda oferece o painel', el('btn-menu-admin').hidden === false);
+
+  // Volta o perfil do servidor como ele é de verdade, para o resto do roteiro.
+  responder('/plano', respostaAdmin('admin@exemplo.com'));
+  await globalThis.sincronizarPerfil();
+  await respirar(25);
 
   console.log('== SESSAO RECUSADA (401) VOLTA AO FREE ==');
   responder('/plano', { erro: 'token_expirado', mensagem: 'Sessão expirada.' }, 401);
@@ -835,6 +1082,53 @@ async function principal() {
   );
   ok('saiu: formulario de conta de volta', el('conta-form').hidden === false);
   ok('sair nao chama a rede', chamadas.length === 0, JSON.stringify(chamadas.map((c) => c.caminho)));
+
+  console.log('== CONFIGURACOES: FREE LOCAL, PREMIUM NO BANCO ==');
+
+  // Deslogado, com uma configuração de free qualquer no armazém.
+  const freeLocal = S.parseSettings({ terms: ['livre'], location: 'Brasil' });
+  armazem.set(S.STORAGE.settings, freeLocal);
+
+  // O "banco" da conta tem OUTRA configuração — é ela que deve valer depois.
+  configRemota.dados = S.parseSettings({ terms: ['do-banco'], location: 'Remoto' });
+
+  limparChamadas();
+  await entrarComo('cliente@exemplo.com', 'senha-boa-1');
+
+  ok('ao logar, puxa do banco', chamou('GET', '/conta/config'));
+  ok(
+    'e as configs do banco passam a valer aqui',
+    (armazem.get(S.STORAGE.settings) || {}).terms &&
+      armazem.get(S.STORAGE.settings).terms.join() === 'do-banco'
+  );
+  ok(
+    'e a copia do free fica guardada para o logout',
+    (armazem.get(S.STORAGE.settingsFree) || {}).terms &&
+      armazem.get(S.STORAGE.settingsFree).terms.join() === 'livre'
+  );
+
+  limparChamadas();
+  el('btn-sair').disparar('click');
+  await respirar(25);
+
+  ok(
+    'ao deslogar, as configs do free voltam',
+    (armazem.get(S.STORAGE.settings) || {}).terms &&
+      armazem.get(S.STORAGE.settings).terms.join() === 'livre'
+  );
+
+  console.log('== PRIMEIRO LOGIN: O QUE JA ESTAVA AQUI SOBE PARA O BANCO ==');
+
+  configRemota.dados = null; // conta nova: nada guardado ainda
+  limparChamadas();
+  await entrarComo('cliente@exemplo.com', 'senha-boa-1');
+
+  const subiu = pedido('POST', '/conta/config');
+  ok(
+    'banco vazio: sobe o que ja estava aqui',
+    Boolean(subiu.corpo) && (subiu.corpo.config.terms || []).join() === 'livre',
+    JSON.stringify(subiu.corpo)
+  );
 
   console.log('== CRIAR CONTA ==');
   limparChamadas();
@@ -888,6 +1182,111 @@ async function principal() {
 
   ok('cache velho (7 h) cai no free', S.temFeature('export') === false);
   ok('e o painel do admin fica escondido', el('admin-panel').hidden === true);
+
+  // --------------------------------------------------------------------------
+  // A credencial que vence: a extensão se DESLOGA sozinha e leva o que era da
+  // conta. O prazo vem do `exp` do próprio token (a resposta de login não manda
+  // o vencimento), então o teste forja o token como o servidor o emitiria.
+  // --------------------------------------------------------------------------
+  console.log('== TOKEN VENCIDO: DESLOGA E LIMPA O QUE ERA DA CONTA ==');
+
+  armazem.set(S.STORAGE.jobs, { '1': { id: '1', title: 'Vaga' } });
+  armazem.set(S.STORAGE.meta, { count: 1 });
+  armazem.set(S.STORAGE.run, { running: true, terms: ['a'] });
+  armazem.set(S.STORAGE.apps, [Date.now()]);
+  armazem.set(S.STORAGE.guard, { until: Date.now() + 1000 });
+  armazem.set(S.STORAGE.settings, { baseUrl: 'x', terms: ['a'] });
+  // A cópia do free (a que o login guardou): é ela que volta quando a credencial
+  // vence — o que era da CONTA sai, e a busca/cotas do free fica no lugar.
+  armazem.set(S.STORAGE.settingsFree, S.parseSettings({ terms: ['livre'] }));
+  armazem.set(S.STORAGE.api, 'http://127.0.0.1:8787');
+  armazem.set(S.STORAGE.sessao, {
+    token: tokenComExp(Math.floor(Date.now() / 1000) - 60),
+    email: 'admin@exemplo.com',
+    papel: 'admin',
+  });
+
+  const vencida = await S.lerSessao();
+  ok('token vencido: lerSessao devolve null', vencida === null, String(vencida));
+  ok('token vencido: a sessao sai do storage', armazem.has(S.STORAGE.sessao) === false);
+  ok('token vencido: o cache do perfil sai', armazem.has(S.STORAGE.perfil) === false);
+  ok('token vencido: as vagas saem', armazem.has(S.STORAGE.jobs) === false);
+  ok('token vencido: a meta sai', armazem.has(S.STORAGE.meta) === false);
+  ok('token vencido: a fila sai', armazem.has(S.STORAGE.run) === false);
+  ok('token vencido: as candidaturas saem', armazem.has(S.STORAGE.apps) === false);
+  ok('token vencido: o guard sai', armazem.has(S.STORAGE.guard) === false);
+  ok(
+    'token vencido: as configuracoes da conta saem (e as do free voltam)',
+    (armazem.get(S.STORAGE.settings) || {}).terms.join() === 'livre',
+    JSON.stringify(armazem.get(S.STORAGE.settings))
+  );
+  ok(
+    'token vencido: o endereco do backend FICA',
+    armazem.get(S.STORAGE.api) === 'http://127.0.0.1:8787'
+  );
+  ok('token vencido: a extensao volta ao free', S.temFeature('export') === false);
+
+  console.log('== TOKEN VALIDO NAO DESLOGA ==');
+  armazem.set(S.STORAGE.sessao, {
+    token: tokenComExp(Math.floor(Date.now() / 1000) + 3600),
+    email: 'cliente@exemplo.com',
+    papel: 'usuario',
+  });
+  const viva = await S.lerSessao();
+  ok('token valido: a sessao continua', Boolean(viva) && viva.email === 'cliente@exemplo.com');
+
+  console.log('== TOKEN SEM `exp` LEGIVEL NAO VENCE SOZINHO ==');
+  armazem.set(S.STORAGE.sessao, { token: 'token-de-mentira', email: 'x@exemplo.com' });
+  const semPrazo = await S.lerSessao();
+  ok('token sem prazo: quem decide e o 401 do servidor', Boolean(semPrazo));
+
+  console.log('== A APLICACAO DO PERFIL SALVO TAMBEM DESLOGA O VENCIDO ==');
+  armazem.set(S.STORAGE.perfil, { perfil: respostaPremium('cliente@exemplo.com'), salvoEm: Date.now() });
+  armazem.set(S.STORAGE.sessao, {
+    token: tokenComExp(Math.floor(Date.now() / 1000) - 60),
+    email: 'cliente@exemplo.com',
+    papel: 'usuario',
+  });
+  await S.aplicarPerfilSalvo();
+  ok('perfil salvo de sessao vencida nao liga o premium', S.temFeature('export') === false);
+  ok('e a sessao vencida sai do storage', armazem.has(S.STORAGE.sessao) === false);
+
+  console.log('== O POP-UP SEGUE O DESLOGAMENTO ==');
+  armazem.set(S.STORAGE.sessao, {
+    token: tokenComExp(Math.floor(Date.now() / 1000) - 60),
+    email: 'admin@exemplo.com',
+    papel: 'admin',
+  });
+  await globalThis.sincronizarPerfil();
+  await respirar(25);
+
+  ok('pop-up: o formulario de conta voltou', el('conta-form').hidden === false);
+  ok('pop-up: o bloco logado saiu', el('conta-logado').hidden === true);
+  ok(
+    'pop-up: nao se diz mais administrador',
+    el('conta-quem').textContent.indexOf('administrador') === -1,
+    el('conta-quem').textContent
+  );
+  ok('pop-up: o painel do admin sumiu', el('admin-panel').hidden === true);
+  ok('pop-up: o menu nao oferece o painel', el('btn-menu-admin').hidden === true);
+  ok('pop-up: ninguem exporta', S.temFeature('export') === false);
+
+  console.log('== SAIR APAGA TUDO O QUE ERA DA CONTA ==');
+  armazem.set(S.STORAGE.jobs, { '1': {} });
+  armazem.set(S.STORAGE.apps, [Date.now()]);
+  armazem.set(S.STORAGE.settings, { baseUrl: 'y', terms: ['conta'] });
+  armazem.set(S.STORAGE.settingsFree, S.parseSettings({ terms: ['livre'] }));
+  armazem.set(S.STORAGE.api, 'http://127.0.0.1:8787');
+  await S.sair();
+  ok('sair: as vagas saem', armazem.has(S.STORAGE.jobs) === false);
+  ok('sair: as candidaturas saem', armazem.has(S.STORAGE.apps) === false);
+  ok(
+    'sair: as configuracoes da conta saem (e as do free voltam)',
+    (armazem.get(S.STORAGE.settings) || {}).terms.join() === 'livre',
+    JSON.stringify(armazem.get(S.STORAGE.settings))
+  );
+  ok('sair: a copia do free FICA (é ela que sustenta o próximo logout)', Boolean(armazem.get(S.STORAGE.settingsFree)));
+  ok('sair: o endereco do backend fica', armazem.get(S.STORAGE.api) === 'http://127.0.0.1:8787');
 
   console.log(
     falhas

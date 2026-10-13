@@ -257,6 +257,40 @@ function principal() {
   );
 
   console.log('');
+  console.log('== o botao de candidatura: Easy Apply x externo ==');
+
+  // O caso que trouxe este trecho: o LinkedIn nem sempre escreve "simplificada"
+  // no botao ("Candidatar-se"/"Apply"). Sem o rotulo generico a classificacao
+  // caia em `desconhecida` e a vaga era pulada SEM CLIQUE (ver `skipIfOffsite`).
+  const tipo = (sinais) => S.classifyApply(sinais);
+  const K = S.APPLY_KINDS;
+
+  ok('rotulo "Candidatar-se" e Easy Apply', tipo({ label: 'Candidatar-se' }) === K.easy);
+  ok('rotulo "Apply" e Easy Apply', tipo({ label: 'Apply' }) === K.easy);
+  ok('rotulo "Se candidatar" e Easy Apply', tipo({ label: 'Se candidatar' }) === K.easy);
+  ok(
+    'rotulo "Candidatura simplificada no LinkedIn" e Easy Apply',
+    tipo({ label: 'Candidatura simplificada no LinkedIn' }) === K.easy
+  );
+  // O externo continua na frente: rotulo, links e icone o denunciam antes.
+  ok(
+    'rotulo "Candidatar-se no site da empresa" e externo',
+    tipo({ label: 'Candidatar-se no site da empresa' }) === K.external
+  );
+  ok(
+    'link para o site da empresa e externo',
+    tipo({ label: 'Candidatar-se', href: 'https://careers.acme.com/job/1' }) === K.external
+  );
+  ok(
+    'redirecionador do LinkedIn para fora e externo',
+    tipo({
+      label: 'Candidatar-se',
+      href: 'https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fjobs.acme.com%2Fx',
+    }) === K.external
+  );
+  ok('sem sinal nenhum continua desconhecido', tipo({ label: '' }) === K.unknown);
+
+  console.log('');
   console.log(
     falhas
       ? '\n' + falhas + '/' + total + ' FALHARAM'

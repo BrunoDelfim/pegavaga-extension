@@ -76,6 +76,12 @@ interface PerfilEdicao {
   features: FeaturesEdicao;
   limites: LimitesEdicao;
   furtividadeFixa: FurtividadeEdicao | null;
+  /**
+   * O perfil veio de `?simular=` (o "ver a tela como" do administrador)? É o MESMO
+   * perfil do outro plano — a diferença é esta marca, e é por ela que a UI avisa
+   * que a tela não é a de produção. Tudo que é real responde `false`.
+   */
+  simulado: boolean;
 }
 
 /** As duas edições que o cliente conhece de fábrica. */
@@ -98,6 +104,7 @@ interface PerfilRemoto {
   rotulo?: unknown;
   features?: Record<string, unknown>;
   limites?: Record<string, unknown>;
+  simulado?: unknown;
 }
 
 /* -----------------------------------------------------------------------------
@@ -170,6 +177,7 @@ var apiEdicoes = (() => {
         per24h: Infinity,
       },
       furtividadeFixa: FURTIVIDADE_SAO,
+      simulado: false,
     },
 
     premium: {
@@ -195,6 +203,7 @@ var apiEdicoes = (() => {
         per24h: 25,
       },
       furtividadeFixa: null, // no premium o usuário ajusta o ritmo
+      simulado: false,
     },
   };
 
@@ -276,6 +285,9 @@ var apiEdicoes = (() => {
       features,
       limites,
       furtividadeFixa: null, // com assinatura, o usuário ajusta o ritmo
+      // O único rastro do `?simular=`: o perfil é o mesmo, mas a tela precisa
+      // avisar que não é a de produção (ver `simulado` no tipo).
+      simulado: fonte.simulado === true,
     };
     ativa = CHAVE_SERVIDOR;
 

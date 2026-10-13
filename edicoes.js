@@ -91,6 +91,7 @@ var apiEdicoes = (() => {
                 per24h: Infinity,
             },
             furtividadeFixa: FURTIVIDADE_SAO,
+            simulado: false,
         },
         premium: {
             chave: 'premium',
@@ -115,6 +116,7 @@ var apiEdicoes = (() => {
                 per24h: 25,
             },
             furtividadeFixa: null, // no premium o usuário ajusta o ritmo
+            simulado: false,
         },
     };
     /* A edição ativa começa no free: 100% local, sem conta e sem rede. O premium
@@ -184,6 +186,9 @@ var apiEdicoes = (() => {
             features,
             limites,
             furtividadeFixa: null, // com assinatura, o usuário ajusta o ritmo
+            // O único rastro do `?simular=`: o perfil é o mesmo, mas a tela precisa
+            // avisar que não é a de produção (ver `simulado` no tipo).
+            simulado: fonte.simulado === true,
         };
         ativa = CHAVE_SERVIDOR;
         return atual();

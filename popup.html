@@ -280,6 +280,9 @@
       .hint.error {
         color: var(--error);
       }
+      .hint.warn {
+        color: var(--warn);
+      }
 
       /* Vale para os elementos que o JS esconde via .hidden: sem isso o
          display: block/flex do CSS venceria o atributo. */
@@ -765,6 +768,14 @@
       .build.premium {
         background: rgba(255, 255, 255, 0.32);
       }
+
+      /* Selo da build no "ver a tela como": a edição mostrada NÃO é a da conta, e
+         isso precisa saltar aos olhos — quem esquece a simulação ligada jura que
+         perdeu o premium. */
+      .build.simulado {
+        background: #ffb703;
+        color: #462f00;
+      }
     </style>
   </head>
   <body>
@@ -968,6 +979,14 @@
             <span>Candidatar-se sozinho pela Candidatura Simplificada</span>
           </label>
 
+          <label class="inline">
+            <input type="checkbox" id="apply-only-easy" />
+            <span>
+              Buscar só vagas com Candidatura Simplificada
+              <span class="hint">(ativa o filtro &quot;Candidatura Simplificada&quot; do LinkedIn)</span>
+            </span>
+          </label>
+
           <div class="grid3">
             <div id="field-apply-per-term">
               <label for="apply-per-term">Por termo</label>
@@ -1124,10 +1143,11 @@
         <p class="hint" id="settings-hint">Salvo automaticamente.</p>
       </details>
 
-      <!-- Painel do administrador: aparece SÓ quando o servidor concede
-           (`features.painelAdmin` na resposta de /plano). Nada aqui é decidido no
-           cliente — cada botão chama uma rota /admin/*, e a resposta do servidor
-           manda. Se o painel sumir, a conta perdeu o papel. -->
+      <!-- Painel do administrador: aparece SÓ para uma conta com o papel — pelo
+           `features.painelAdmin` da resposta de /plano ou pelo `papel` da sessão
+           (ver `ehAdmin` no popup.js). Nada aqui é decidido no cliente — cada botão
+           chama uma rota /admin/*, e a resposta do servidor manda. Se o painel
+           sumir, a conta perdeu o papel. -->
       <details class="settings card" id="admin-panel" hidden>
         <summary>
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -1137,14 +1157,17 @@
         </summary>
 
         <p class="hint">
-          Só a conta de administrador vê este painel. Emitir e revogar licença vale
-          na hora: o plano é reconsultado pelo servidor a cada pedido.
+          Só a conta de administrador vê este painel — e ela já é <b>Premium sem
+          precisar de licença</b>: o plano dela vem do papel, não de uma assinatura.
+          Emitir e revogar licença vale na hora, para os clientes: o plano deles é
+          reconsultado pelo servidor a cada pedido.
         </p>
 
         <span class="sub">Ver a tela como</span>
-        <div class="grid2">
+        <div class="grid3">
           <div><button id="btn-simular-free" type="button">Free</button></div>
           <div><button id="btn-simular-premium" type="button">Premium</button></div>
+          <div><button id="btn-simular-real" type="button">Meu plano</button></div>
         </div>
 
         <span class="sub">Emitir / renovar licença</span>

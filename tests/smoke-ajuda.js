@@ -1,19 +1,15 @@
 /* =============================================================================
  * PegaVaga - tests/smoke-ajuda.js
  *
- * Teste de fumaca do (temporario) pedido de ajuda ao usuario: quando a
- * Candidatura Simplificada trava num campo que a extensao nao sabe responder — ou
- * o envio demora a confirmar — o PegaVaga avisa na area de trabalho e pergunta se
- * voce quer preencher a vaga a mao ou pular para a proxima.
+ * Teste de fumaça do pedido de ajuda, nas DUAS pontas dele:
  *
- * O teste roda no Node puro, sem npm install, e cobre as duas pontas de verdade:
- *
- *   1. o CONTRATO no shared.js (textos, botoes, id do aviso e os desfechos
- *      `manual`/`pulada`), que e o unico lugar que sabe o que o aviso diz;
- *   2. o background.js RODANDO com um `chrome` falso (storage, alarms, tabs,
- *      windows e notifications): o pedido vira notificacao com os dois botoes, o
- *      clique leva a decisao para a aba de origem — o "Vou preencher à mão" traz
- *      essa aba para frente (com o foco na janela dela) — e o aviso sai da tela.
+ *   1. o módulo puro `ajuda-campos.js` — o casamento de texto/opções que o
+ *      cartão usa para respeitar os <select>/rádio/checkbox do LinkedIn;
+ *   2. o `background.js` RODANDO com um `chrome` falso: o pedido de ajuda do
+ *      content script vira um aviso NO DESKTOP (notificação do sistema — o
+ *      cartão vive na aba e você pode estar em outra aba), o clique no aviso
+ *      traz a aba da vaga para a frente (com foco na janela) e o fim do
+ *      pedido recolhe o aviso.
  *
  *   node tests/smoke-ajuda.js
  * ===========================================================================*/
@@ -42,37 +38,59 @@ function ok(nome, cond, detalhe) {
 const respirar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* -------------------------------------------------------------------------- */
-/* shared.js e edicoes.js: carregados como o navegador faz (sem DOM)           */
+/* 1. O módulo puro (ajuda-campos.js) — casamento de texto/opções              */
 /* -------------------------------------------------------------------------- */
 
-for (const arquivo of ['edicoes.js', 'shared.js']) {
-  vm.runInThisContext(fs.readFileSync(path.join(raiz, arquivo), 'utf8'), { filename: arquivo });
-}
+vm.runInThisContext(fs.readFileSync(path.join(raiz, 'ajuda-campos.js'), 'utf8'), {
+  filename: 'ajuda-campos.js',
+});
 
-// Sem rede: o perfil vem do cache local, como num navegador offline.
-globalThis.fetch = () => Promise.reject(new Error('sem rede no teste'));
+const A = globalThis.PegaVagaAjuda;
 
-const S = globalThis.PegaVagaShared;
-
-if (!S) {
-  console.log('FALHA: os modulos nao carregaram (shared/edicoes).');
+if (!A || typeof A.normalizar !== 'function' || typeof A.escolherOpcao !== 'function') {
+  console.log('FALHA: o módulo ajuda-campos.js nao exportou normalizar/escolherOpcao.');
   process.exit(1);
 }
 
+console.log('== normalizar (bate rótulo do cartão com o campo da página) ==');
+ok('minúsculas', A.normalizar('Sim, com experiência') === 'sim com experiencia');
+ok('tira acento', A.normalizar('função') === 'funcao');
+ok('pontuação vira espaço', A.normalizar('React/Node.js') === 'react node js');
+ok('colapsa espaços e corta pontas', A.normalizar('  Anos   de  experiência.  ') === 'anos de experiencia');
+ok('espaço vazio devolve vazio', A.normalizar('   ') === '');
+ok('null/undefined não quebra', A.normalizar(null) === '' && A.normalizar(undefined) === '');
+ok('mesmo texto, grafias diferentes, batem', A.normalizar('São Paulo') === A.normalizar('sao paulo.'));
+
+console.log('== escolherOpcao (select/rádio respeitam a opção escolhida) ==');
+const dias = ['Segunda', 'Terça', 'Quarta', 'Sexta'];
+ok('bate exato', A.escolherOpcao(dias, 'Quarta') === 2);
+ok('case/acentos não atrapalham', A.escolherOpcao(dias, 'terça') === 1);
+ok('exato vence "contém"', A.escolherOpcao(['Sim', 'Sim, com restrições'], 'Sim') === 0);
+ok('cai no "contém" quando não há exato', A.escolherOpcao(['Sim, com restrições'], 'restrições') === 0);
+ok('devolve -1 quando nada casa', A.escolherOpcao(dias, 'Domingo') === -1);
+ok('alvo vazio devolve -1', A.escolherOpcao(dias, '') === -1);
+ok('lista vazia devolve -1', A.escolherOpcao([], 'Segunda') === -1);
+ok('lista não-array não quebra', A.escolherOpcao(null, 'x') === -1);
+
+
+
 /* -------------------------------------------------------------------------- */
-/* chrome falso do service worker                                              */
+/* 2. O cartão NO DESKTOP (background.js com um chrome falso)                  */
 /* -------------------------------------------------------------------------- */
 //
-// So o que o background.js usa: storage, alarms, tabs, windows, action e a API de
-// notificacoes (o aviso na area de trabalho). `avisos`/`limpos`/`enviados`/
-// `ativadas`/`janelas` sao o que o teste confere depois.
+// O pedido de ajuda abre o cartão (ajuda.html) como JANELA POPUP do Chrome,
+// sem moldura, no desktop. Aqui verificamos: a janela abre com os CAMPOS na
+// URL (a janelinha desenha o <select> com as opções originais), a sua decisão
+// volta pela aba certa (sendToTab) — e a janela é fechada.
 
 const JANELA_DA_ABA = 7; // a janela onde vive a aba 42 (a da vaga)
+const JANELA_DO_CARTAO = 11; // a janelinha do pedido de ajuda
 
 const armazem = new Map();
-const ouvintes = { mensagem: [], botao: [] };
-const avisos = []; // { id, opcoes } criados
-const limpos = []; // ids de aviso tirados da tela
+const ouvintes = { mensagem: [] };
+const janelasCriadas = []; // { id, opcoes } windows.create
+const janelasFechadas = []; // ids windows.remove
+let recusarPopup = false; // quando true, `type: 'popup'` é recusado (como numa plataforma sem ele)
 const enviados = []; // { tabId, mensagem } mandados para a aba
 const ativadas = []; // { tabId, opcoes } abas trazidas para frente
 const janelasFocadas = []; // { janelaId, opcoes } janelas que ganharam foco
@@ -130,9 +148,23 @@ const chromeFalso = {
     },
   },
   windows: {
+    create(opcoes) {
+      if (recusarPopup && opcoes && opcoes.type === 'popup') {
+        return Promise.reject(new Error('tipo popup recusado nesta plataforma'));
+      }
+      janelasCriadas.push({ id: JANELA_DO_CARTAO, opcoes: opcoes });
+      return Promise.resolve({ id: JANELA_DO_CARTAO });
+    },
+    remove(id) {
+      janelasFechadas.push(id);
+      return Promise.resolve();
+    },
+    getCurrent() {
+      return Promise.resolve({ id: JANELA_DO_CARTAO, left: 1500, top: 500, width: 372, height: 470 });
+    },
     update(janelaId, opcoes) {
       janelasFocadas.push({ janelaId, opcoes });
-      return Promise.resolve({ id: janelaId, focused: true });
+      return Promise.resolve({ id: janelaId });
     },
   },
   action: {
@@ -142,25 +174,24 @@ const chromeFalso = {
     setBadgeBackgroundColor() {},
     setBadgeTextColor() {},
   },
-  notifications: {
-    create(id, opcoes, callback) {
-      avisos.push({ id, opcoes });
-      if (callback) callback(id);
-    },
-    clear(id) {
-      limpos.push(id);
-      return Promise.resolve(true);
-    },
-    onButtonClicked: {
-      addListener(fn) {
-        ouvintes.botao.push(fn);
-      },
-    },
-  },
 };
 
 globalThis.chrome = chromeFalso;
 globalThis.importScripts = () => {}; // o background carrega edicoes/shared "do navegador"
+
+for (const arquivo of ['edicoes.js', 'shared.js']) {
+  vm.runInThisContext(fs.readFileSync(path.join(raiz, arquivo), 'utf8'), { filename: arquivo });
+}
+
+// Sem rede: o perfil vem do cache local, como num navegador offline.
+globalThis.fetch = () => Promise.reject(new Error('sem rede no teste'));
+
+const S = globalThis.PegaVagaShared;
+
+if (!S) {
+  console.log('FALHA: os modulos nao carregaram (shared/edicoes).');
+  process.exit(1);
+}
 
 /** Fala com o service worker como o content script faria (e espera a resposta). */
 function falarComOWorker(mensagem, sender) {
@@ -177,287 +208,160 @@ function falarComOWorker(mensagem, sender) {
   });
 }
 
-/** Clique num botão do aviso (como o Chrome entrega em onButtonClicked). */
-function clicarNoAviso(indice, avisoId) {
-  const id = avisoId || (avisos[avisos.length - 1] || {}).id;
-  ouvintes.botao.forEach((fn) => fn(id, indice));
+/** Lê o `?dados=` da janelinha como a própria página faria. */
+function lerDadosDaJanela(opcoes) {
+  const url = String((opcoes && opcoes.url) || '');
+  const bruto = (url.split('?dados=')[1] || '').split('&')[0];
+  return JSON.parse(decodeURIComponent(bruto));
 }
 
-/* -------------------------------------------------------------------------- */
-/* O contrato do aviso (shared.js)                                             */
-/* -------------------------------------------------------------------------- */
-
 async function principal() {
-  console.log('== CONTRATO DO AVISO (shared.js) ==');
-
-  ok(
-    'as tres mensagens do pedido existem',
-    S.MSG.AJUDA_PEDIDO === 'PEGAVAGA_AJUDA_PEDIDO' &&
-      S.MSG.AJUDA_RESPOSTA === 'PEGAVAGA_AJUDA_RESPOSTA' &&
-      S.MSG.AJUDA_FECHAR === 'PEGAVAGA_AJUDA_FECHAR'
-  );
-  ok('dois motivos conhecidos', Object.keys(S.AJUDA_MOTIVOS).length === 2, JSON.stringify(S.AJUDA_MOTIVOS));
-  ok(
-    'dois botoes, na ordem',
-    S.AJUDA_BOTOES.length === 2 &&
-      S.AJUDA_BOTOES[0] === 'Vou preencher à mão' &&
-      S.AJUDA_BOTOES[1] === 'Pular esta vaga',
-    JSON.stringify(S.AJUDA_BOTOES)
-  );
-  ok('botao 0 = preencher a mao', S.acaoDaAjuda(0) === 'manual');
-  ok('botao 1 = pular', S.acaoDaAjuda(1) === 'pular');
-  ok(
-    'indice fora da faixa nao e acao',
-    S.acaoDaAjuda(2) === '' && S.acaoDaAjuda(-1) === '' && S.acaoDaAjuda(undefined) === '',
-    String(S.acaoDaAjuda(2))
-  );
-
-  ok('o id do aviso carrega a aba', S.ajudaId(42, 'p1') === 'pegavaga-ajuda:42:p1', S.ajudaId(42, 'p1'));
-  ok(
-    'ler o id devolve aba e pedido',
-    JSON.stringify(S.lerAjudaId('pegavaga-ajuda:42:p1')) === JSON.stringify({ tabId: 42, pedidoId: 'p1' })
-  );
-  ok(
-    'id que nao e nosso nao vale',
-    S.lerAjudaId('outro:42:p1') === null && S.lerAjudaId('pegavaga-ajuda:42') === null && S.lerAjudaId('') === null
-  );
-  ok('id sem aba nao vale (Number("") seria 0)', S.lerAjudaId('pegavaga-ajuda::p1') === null);
-
-  const demora = S.textoDaAjuda({
-    motivo: 'demora',
-    titulo: 'Dev React',
-    empresa: 'Acme',
-    problema: 'Telefone',
-  });
-
-  ok('o titulo se marca como temporario', demora.title.includes('temporário'), demora.title);
-  ok('a mensagem diz a vaga', demora.message.includes('Dev React — Acme'), demora.message);
-  ok('a mensagem diz o motivo da demora', demora.message.includes('não confirmou'), demora.message);
-  ok('a mensagem traz o problema lido na tela', demora.message.includes('Telefone'), demora.message);
-  ok(
-    'a mensagem oferece as duas saidas',
-    demora.message.includes('à mão') && demora.message.includes('pular'),
-    demora.message
-  );
-
-  const campos = S.textoDaAjuda({ motivo: 'campos' });
-
-  ok('o motivo de campo tem o seu texto', campos.message.includes('campo'), campos.message);
-  ok('sem vaga a mensagem nao comeca com dois pontos', campos.message[0] !== ':', campos.message);
-  ok('motivo desconhecido cai no de campo', S.textoDaAjuda({ motivo: 'x' }).message === campos.message);
-
-  ok(
-    'desfecho manual: temporario e definitivo',
-    S.APPLY_OUTCOMES.manual.label.includes('(temporário)') &&
-      S.APPLY_OUTCOMES.manual.failure === true &&
-      S.APPLY_OUTCOMES.manual.label.includes('Preenchida por você'),
-    S.APPLY_OUTCOMES.manual.label
-  );
-  ok(
-    'desfecho pulada: temporario e definitivo',
-    S.APPLY_OUTCOMES.pulada.label.includes('(temporário)') &&
-      S.APPLY_OUTCOMES.pulada.failure === true &&
-      S.APPLY_OUTCOMES.pulada.label.includes('Pulada por você'),
-    S.APPLY_OUTCOMES.pulada.label
-  );
-  ok(
-    'os dois aparecem no relatorio',
-    S.applyOutcomeLabel('manual').includes('temporário') && S.applyOutcomeLabel('pulada').includes('temporário')
-  );
-  ok(
-    'e descrevem o que aconteceu',
-    S.describeApplyFailure({ applyStatus: 'manual' }).reason.includes('preencher à mão') &&
-      S.describeApplyFailure({ applyStatus: 'pulada' }).reason.includes('pular') &&
-      S.describeApplyFailure({ applyStatus: 'manual' }).pending === false
-  );
-  ok(
-    'eles contam como nao candidatadas (vão para o CSV de falhas)',
-    S.summarizeApply([{ id: 'a', applyStatus: 'manual' }, { id: 'b', applyStatus: 'pulada' }], {}).failed === 2,
-    JSON.stringify(S.summarizeApply([{ id: 'a', applyStatus: 'manual' }], {}))
-  );
-
-  /* ------------------------------------------------------------------------ */
-  /* O background.js rodando                                                   */
-  /* ------------------------------------------------------------------------ */
-
-  console.log('');
-  console.log('== O AVISO NA AREA DE TRABALHO (background.js) ==');
-
+  console.log('== o cartão NO DESKTOP (background.js rodando) ==');
   vm.runInThisContext(fs.readFileSync(path.join(raiz, 'background.js'), 'utf8'), {
     filename: 'background.js',
   });
+  await respirar(20); // o worker faz syncAlarm/refresh assíncronos no load
 
-  // O worker se ajusta sozinho ao subir (alarme + luz do icone): deixamos essa
-  // primeira rodada terminar antes de falar com ele.
-  await respirar(25);
-
-  ok('o worker escuta o pedido de ajuda', ouvintes.mensagem.length === 1, String(ouvintes.mensagem.length));
-  ok('e escuta o clique nos botoes do aviso', ouvintes.botao.length === 1, String(ouvintes.botao.length));
-
-  const senderDaAba = { tab: { id: 42 } };
-  const pedido = {
-    type: S.MSG.AJUDA_PEDIDO,
-    pedidoId: 'p1',
-    motivo: 'campos',
-    titulo: 'Dev React',
-    empresa: 'Acme',
-    problema: 'Vaga efetiva? (Sim/Não)',
-  };
-
-  const resposta = await falarComOWorker(pedido, senderDaAba);
-
-  ok('o pedido foi atendido', Boolean(resposta && resposta.ok), JSON.stringify(resposta));
-  ok('o aviso leva a aba de origem no id', resposta.id === 'pegavaga-ajuda:42:p1', String(resposta.id));
-  ok('um aviso foi criado', avisos.length === 1, String(avisos.length));
-
-  const opcoes = (avisos[0] || {}).opcoes || {};
-
-  ok(
-    'e uma notificacao simples, com o nosso icone',
-    opcoes.type === 'basic' && String(opcoes.iconUrl).includes('pg-128.png'),
-    String(opcoes.iconUrl)
-  );
-  ok(
-    'com os dois botoes do contrato',
-    (opcoes.buttons || []).length === 2 &&
-      opcoes.buttons[0].title === S.AJUDA_BOTOES[0] &&
-      opcoes.buttons[1].title === S.AJUDA_BOTOES[1],
-    JSON.stringify(opcoes.buttons)
-  );
-  ok('que fica na tela ate voce escolher', opcoes.requireInteraction === true);
-  ok(
-    'com o texto vindo do contrato (vaga + motivo)',
-    opcoes.title === S.textoDaAjuda(pedido).title &&
-      opcoes.message === S.textoDaAjuda(pedido).message &&
-      opcoes.message.includes('Dev React — Acme'),
-    opcoes.message
+  /* O pedido de ajuda do content script abre o cartão como JANELA POPUP —
+   * no desktop, não dentro da aba. Os campos (com tipo e opções) viajam na
+   * URL: é o que a janelinha desenha. */
+  const campos = [
+    { rotulo: 'Pretensão salarial', tipo: 'texto', opcoes: [] },
+    { rotulo: 'Dias presenciais', tipo: 'select', opcoes: ['Seg a Sex', 'Seg, Qua e Sex'] },
+  ];
+  const aberta = await falarComOWorker(
+    {
+      type: S.MSG.AJUDA_PEDIDO,
+      pedidoId: 'p1',
+      motivo: 'campos',
+      titulo: 'Dev React',
+      empresa: 'ACME',
+      campos: campos,
+    },
+    { tab: { id: 42 } }
   );
 
-  clicarNoAviso(1); // "Pular esta vaga"
-  await respirar(10);
-
+  ok('pedido devolve ok', aberta && aberta.ok === true, JSON.stringify(aberta));
+  ok('id do pedido carrega a aba', aberta && aberta.id === 'pegavaga-ajuda:42:p1', aberta && aberta.id);
+  ok('uma janelinha criada', janelasCriadas.length === 1, janelasCriadas.length);
   ok(
-    'clicar em pular responde na aba de origem',
-    enviados.length === 1 && enviados[0].tabId === 42,
+    'é uma janela popup (sem moldura de navegador)',
+    janelasCriadas[0] && janelasCriadas[0].opcoes.type === 'popup'
+  );
+  ok(
+    'abre o ajuda.html',
+    janelasCriadas[0] && /ajuda\.html\?dados=/.test(janelasCriadas[0].opcoes.url),
+    janelasCriadas[0] && janelasCriadas[0].opcoes.url
+  );
+
+  const dados = janelasCriadas[0] ? lerDadosDaJanela(janelasCriadas[0].opcoes) : {};
+  ok('a URL carrega o id do pedido', dados.avisoId === 'pegavaga-ajuda:42:p1', dados.avisoId);
+  ok('a URL carrega a vaga', dados.titulo === 'Dev React' && dados.empresa === 'ACME');
+  ok(
+    'a URL carrega os campos com tipo e opções',
+    Array.isArray(dados.campos) &&
+      dados.campos.length === 2 &&
+      dados.campos[1].tipo === 'select' &&
+      dados.campos[1].opcoes.join(' | ') === 'Seg a Sex | Seg, Qua e Sex',
+    JSON.stringify(dados.campos)
+  );
+
+  /* Recusas: sem pedido não há o que abrir; sem aba não há para quem responder. */
+  const semPedido = await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO }, { tab: { id: 42 } });
+  ok('sem pedidoId não abre', semPedido && semPedido.ok === false);
+  ok('e diz o motivo (sem_pedido)', semPedido && semPedido.motivo === 'sem_pedido', semPedido && semPedido.motivo);
+  const semAba = await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p2' }, {});
+  ok('sem aba não abre', semAba && semAba.ok === false);
+  ok('e diz o motivo (sem_aba)', semAba && semAba.motivo === 'sem_aba', semAba && semAba.motivo);
+
+  ok('nenhuma janela extra nas recusas', janelasCriadas.length === 1, janelasCriadas.length);
+
+  /* A janela é pedida como `popup` (só barra de título + borda do sistema). Se a
+   * plataforma recusar o tipo, o worker tenta de novo — e CONTA a recusa, para a
+   * moldura errada não passar em silêncio. */
+  recusarPopup = true;
+  const comRecusa = await falarComOWorker(
+    { type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p4' },
+    { tab: { id: 44 } }
+  );
+  recusarPopup = false;
+  ok('popup recusado: ainda abre (noutro formato)', comRecusa && comRecusa.ok === true, JSON.stringify(comRecusa));
+  ok(
+    'e conta a recusa do tipo popup',
+    comRecusa && /popup recusado/.test(String(comRecusa.recusa)),
+    comRecusa && comRecusa.recusa
+  );
+
+  /* A sua decisão veio da janelinha: o worker encaminha para a ABA certa e
+   * fecha a janela (a janelinha espera o "feche-se" do worker). */
+  const resposta = await falarComOWorker({
+    type: S.MSG.AJUDA_RESPOSTA_JANELA,
+    avisoId: 'pegavaga-ajuda:42:p1',
+    acao: 'aplicar',
+    resposta: { 'Pretensão salarial': '12000' },
+  });
+  ok('decisão processada', resposta && resposta.ok === true);
+  ok(
+    'decisão vai para a aba certa',
+    enviados.some(
+      (e) =>
+        e.tabId === 42 &&
+        e.mensagem.type === S.MSG.AJUDA_RESPOSTA &&
+        e.mensagem.pedidoId === 'p1' &&
+        e.mensagem.acao === 'aplicar' &&
+        e.mensagem.resposta &&
+        e.mensagem.resposta['Pretensão salarial'] === '12000'
+    ),
     JSON.stringify(enviados)
   );
+  ok('janela é fechada após a decisão', janelasFechadas.indexOf(JANELA_DO_CARTAO) >= 0);
+
+  /* "Vou preencher à mão": a aba da vaga vem para a frente ANTES da decisão. */
+  await falarComOWorker(
+    { type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p2', motivo: 'campos' },
+    { tab: { id: 42 } }
+  );
+  ativadas.length = 0;
+  janelasFocadas.length = 0;
+  await falarComOWorker({
+    type: S.MSG.AJUDA_RESPOSTA_JANELA,
+    avisoId: 'pegavaga-ajuda:42:p2',
+    acao: 'manual',
+  });
+  ok('"à mão" traz a aba para frente', ativadas.some((a) => a.tabId === 42 && a.opcoes.active === true));
+  ok('"à mão" foca a janela da aba', janelasFocadas.some((j) => j.janelaId === JANELA_DA_ABA));
+
+  /* O fim do pedido na aba (prazo/aborto) some com a janelinha. */
+  await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p3' }, { tab: { id: 43 } });
+  const antes = janelasFechadas.length;
+  const fechar = await falarComOWorker({ type: S.MSG.AJUDA_FECHAR, avisoId: 'pegavaga-ajuda:43:p3' });
+  ok('fechar devolve ok', fechar && fechar.ok === true);
+  ok('fechar recolhe a janela', janelasFechadas.length === antes + 1);
+
+  /* Id que não é nosso: o worker não mexe no que é de fora. */
+  const deFora = await falarComOWorker({ type: S.MSG.AJUDA_FECHAR, avisoId: 'algo:de:fora' });
+  ok('id de fora não fecha nada', deFora && deFora.ok === true && janelasFechadas.length === antes + 1);
+
+  /* O contrato dos ids (shared.js) — é o id que liga a janelinha à aba. */
+  console.log('== o id que liga a janelinha à aba (shared.js) ==');
   ok(
-    'com a mensagem, o pedido e a decisao certos',
-    enviados[0].mensagem.type === S.MSG.AJUDA_RESPOSTA &&
-      enviados[0].mensagem.pedidoId === 'p1' &&
-      enviados[0].mensagem.acao === 'pular',
-    JSON.stringify(enviados[0].mensagem)
+    'id carrega a aba',
+    JSON.stringify(S.lerAjudaId('pegavaga-ajuda:42:p1')) === '{"tabId":42,"pedidoId":"p1"}'
   );
-  ok('e o aviso sai da tela', limpos.includes('pegavaga-ajuda:42:p1'), JSON.stringify(limpos));
-  ok(
-    'pular nao mexe no foco: a varredura segue onde voce esta',
-    ativadas.length === 0 && janelasFocadas.length === 0,
-    JSON.stringify({ ativadas, janelasFocadas })
-  );
+  ok('id de fora devolve null', S.lerAjudaId('x:y') === null && S.lerAjudaId(null) === null);
 
-  clicarNoAviso(0); // "Vou preencher à mão"
-  await respirar(10);
+  finalizar();
+}
 
-  ok(
-    'clicar em preencher à mão devolve manual',
-    enviados.length === 2 && enviados[1].mensagem.acao === 'manual',
-    JSON.stringify(enviados[1] && enviados[1].mensagem)
-  );
-  ok(
-    'e traz a aba da vaga para frente',
-    ativadas.length === 1 && ativadas[0].tabId === 42 && ativadas[0].opcoes.active === true,
-    JSON.stringify(ativadas)
-  );
-  ok(
-    'com o foco na janela dela (nao so na aba)',
-    janelasFocadas.length === 1 &&
-      janelasFocadas[0].janelaId === JANELA_DA_ABA &&
-      janelasFocadas[0].opcoes.focused === true,
-    JSON.stringify(janelasFocadas)
-  );
-
-  const antesDosCliquesEstranhos = enviados.length;
-
-  clicarNoAviso(0, 'outro:42:p1'); // id que não é um aviso nosso
-  clicarNoAviso(7, 'pegavaga-ajuda:42:p1'); // índice que não é botão nosso
-  await respirar(10);
-
-  ok(
-    'clique sem destino nao responde nada',
-    enviados.length === antesDosCliquesEstranhos,
-    JSON.stringify(enviados.slice(antesDosCliquesEstranhos))
-  );
-  ok(
-    'e nao mexe no foco de ninguem',
-    ativadas.length === 1 && janelasFocadas.length === 1,
-    JSON.stringify({ ativadas, janelasFocadas })
-  );
-  ok('e o aviso alheio sai da tela mesmo assim', limpos.includes('outro:42:p1'));
-
-  const semIdentificacao = await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO }, senderDaAba);
-
-  ok(
-    'pedido sem id nao vira aviso',
-    semIdentificacao && semIdentificacao.ok === false && semIdentificacao.motivo === 'pedido_sem_id',
-    JSON.stringify(semIdentificacao)
-  );
-
-  const semAba = await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p2' }, {});
-
-  ok(
-    'pedido sem aba de origem nao vira aviso (nao haveria para quem responder)',
-    semAba && semAba.ok === false && semAba.motivo === 'sem_aba',
-    JSON.stringify(semAba)
-  );
-  ok('e nenhum dos dois criou aviso na tela', avisos.length === 1, String(avisos.length));
-
-  const fechado = await falarComOWorker(
-    { type: S.MSG.AJUDA_FECHAR, avisoId: 'pegavaga-ajuda:42:p1' },
-    senderDaAba
-  );
-
-  ok('o pedido de fechar e atendido', Boolean(fechado && fechado.ok));
-  ok(
-    'e o aviso volta a sair da tela',
-    limpos.filter((id) => id === 'pegavaga-ajuda:42:p1').length >= 2,
-    JSON.stringify(limpos)
-  );
-
-  const andamento = await falarComOWorker({ type: S.MSG.PROGRESS, run: null, guard: null }, senderDaAba);
-
-  ok(
-    'o aviso de andamento nao cria notificacao',
-    andamento === undefined && avisos.length === 1,
-    JSON.stringify(andamento)
-  );
-
-  // Sem a API de notificacoes (navegador sem ela ou permissao negada), o worker
-  // diz que nao conseguiu avisar — assim o content script segue o fluxo de sempre
-  // em vez de esperar para sempre por uma resposta que nunca vem.
-  const guardada = chromeFalso.notifications;
-  chromeFalso.notifications = undefined;
-
-  const semApi = await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p9' }, senderDaAba);
-
-  ok(
-    'sem chrome.notifications nao promete aviso',
-    semApi && semApi.ok === false && semApi.motivo === 'sem_notificacao',
-    JSON.stringify(semApi)
-  );
-
-  chromeFalso.notifications = guardada;
-
-  console.log('');
+function finalizar() {
   console.log(
-    falhas
-      ? '\n' + falhas + '/' + total + ' FALHARAM'
-      : '\nTodos os ' + total + ' testes do pedido de ajuda passaram.'
+    falhas ? '\n' + falhas + '/' + total + ' FALHARAM' : '\nTodos os ' + total + ' testes do pedido de ajuda passaram.'
   );
   process.exit(falhas ? 1 : 0);
 }
 
 principal().catch((erro) => {
-  console.log('FALHA INESPERADA: ' + (erro && erro.stack ? erro.stack : erro));
-  process.exit(1);
+  ok('fluxo principal', false, erro && erro.message);
+  finalizar();
 });
 

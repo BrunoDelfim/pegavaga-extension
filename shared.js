@@ -27,6 +27,7 @@ var apiShared = (() => {
         jobs: 'pegavaga_jobs', // { [jobId]: { id, title, company, link, description } }
         meta: 'pegavaga_meta', // { lastRun, count, pageUrl }
         settings: 'pegavaga_settings', // busca + cotas de candidatura + agendador
+        settingsFree: 'pegavaga_settings_free', // as MESMAS configs, mas do free (sobrevivem ao logout)
         run: 'pegavaga_run', // fila de termos em andamento
         apps: 'pegavaga_apps', // timestamps (ms) das candidaturas enviadas
         guard: 'pegavaga_guard', // bloqueio temporário detectado (proteção da conta)
@@ -42,10 +43,14 @@ var apiShared = (() => {
         CLEAR: 'PEGAVAGA_CLEAR',
         PROGRESS: 'PEGAVAGA_PROGRESS',
         RESUME: 'PEGAVAGA_RESUME',
-        /* (TEMPORÁRIO) Pedido de ajuda ao usuário — ver a seção abaixo. */
-        AJUDA_PEDIDO: 'PEGAVAGA_AJUDA_PEDIDO', // content → worker: mostre o aviso
+        /* Pedido de ajuda: o cartão de resposta abre como janela NO DESKTOP (sem
+         * moldura, no canto inferior direito). O pedido vem do content script, a
+         * resposta volta pela aba certa (o id do pedido carrega o `tabId`). */
+        AJUDA_PEDIDO: 'PEGAVAGA_AJUDA_PEDIDO', // content → worker: abra o cartão
         AJUDA_RESPOSTA: 'PEGAVAGA_AJUDA_RESPOSTA', // worker → content: a sua decisão
-        AJUDA_FECHAR: 'PEGAVAGA_AJUDA_FECHAR', // content → worker: some com o aviso
+        AJUDA_FECHAR: 'PEGAVAGA_AJUDA_FECHAR', // content → worker: recolha o cartão
+        /* A janelinha manda a decisão de volta para o worker por aqui. */
+        AJUDA_RESPOSTA_JANELA: 'PEGAVAGA_AJUDA_RESPOSTA_JANELA', // cartão → worker
     };
     const LINKEDIN_SEARCH_URL = 'https://www.linkedin.com/jobs/search/';
     const MAX_TERMS = 40; // trava de segurança por execução
@@ -62,6 +67,7 @@ var apiShared = (() => {
         baseUrl: LINKEDIN_SEARCH_URL,
         location: '',
         terms: [],
+        onlyEasyApply: false, // buscar só vagas de Candidatura Simplificada (filtro f_AL)
         apply: {
             enabled: false, // candidatar-se sozinho só se o usuário ligar
             perTerm: 8, // candidaturas por termo de busca
@@ -174,7 +180,12 @@ var apiShared = (() => {
     function extensaoApi() {
         return typeof chrome !== 'undefined' && chrome && chrome.storage ? chrome.storage.local : null;
     }
-    /** Endereço do backend (o do storage, ou o padrão de desenvolvimento). */
+    /**
+     * Endereço do backend: o que foi configurado, ou o padrão de desenvolvimento —
+     * o mesmo `http://127.0.0.1:8787` do `docker compose`. É o endereço que a
+     * extensão usa em TODA chamada, e é ele que o painel do administrador mostra no
+     * campo (sempre preenchido: um campo vazio não diria para onde a extensão fala).
+     */
     async function apiUrl() {
         const storage = extensaoApi();
         if (!storage)
@@ -186,19 +197,6 @@ var apiShared = (() => {
         }
         catch (erro) {
             return API_PADRAO;
-        }
-    }
-    /** Endereço configurado ('' quando ninguém mexeu — vale o padrão). */
-    async function lerApi() {
-        const storage = extensaoApi();
-        if (!storage)
-            return '';
-        try {
-            const dados = await storage.get(STORAGE.api);
-            return String(dados[STORAGE.api] || '');
-        }
-        catch (erro) {
-            return '';
         }
     }
     /** Troca o endereço do backend (apontar para o servidor de produção, por ex.). */
@@ -215,8 +213,12 @@ var apiShared = (() => {
         }
         return limpo;
     }
-    /** A sessão guardada, ou null — sem token não há sessão. */
-    async function lerSessao() {
+    /**
+     * A sessão CRUA do storage — sem validar o vencimento e sem deslogar. Só quem
+     * precisa decidir com o token na mão chama isto (ver `sessaoVencida`); o resto
+     * do programa usa `lerSessao`.
+     */
+    async function sessaoGuardada() {
         const storage = extensaoApi();
         if (!storage)
             return null;
@@ -229,23 +231,90 @@ var apiShared = (() => {
             return null;
         }
     }
+    /**
+     * O `exp` do token (epoch em ms), lido do PRÓPRIO token — ou null quando ele
+     * não traz um `exp` legível.
+     *
+     * O token de conta é um JWT (`cabecalho.corpo.assinatura`, base64url) e carrega
+     * o vencimento no corpo. A resposta de login NÃO manda esse prazo, então ler
+     * aqui é o que permite a extensão se deslogar na hora certa, sem esperar um 401
+     * (que só chegaria na próxima chamada ao `/plano`). Nada é decidido por isto: a
+     * assinatura continua sendo conferida pelo servidor, a cada pedido — aqui é só
+     * relógio.
+     */
+    function prazoDoToken(token) {
+        const partes = String(token || '').split('.');
+        if (partes.length !== 3 || typeof atob !== 'function')
+            return null;
+        try {
+            const base64 = partes[1].replace(/-/g, '+').replace(/_/g, '/');
+            const recheio = '='.repeat((4 - (base64.length % 4)) % 4);
+            const corpo = JSON.parse(atob(base64 + recheio));
+            const exp = Number(corpo && corpo.exp);
+            return Number.isFinite(exp) ? exp * 1000 : null;
+        }
+        catch (erro) {
+            return null; // outro formato de token: quem diz se vale é o servidor
+        }
+    }
+    /**
+     * A credencial já passou do vencimento? Sem `exp` legível no token, NÃO vence
+     * sozinha — aí quem decide é o 401 do servidor, como sempre foi.
+     */
+    function sessaoVencida(sessao) {
+        if (!sessao || !sessao.token)
+            return false;
+        const prazo = prazoDoToken(sessao.token);
+        return prazo != null && Date.now() >= prazo;
+    }
+    /**
+     * A sessão guardada, ou null — sem token não há sessão.
+     *
+     * Token VENCIDO também é `null`: a extensão se desloga sozinha (e leva o que
+     * era da conta; ver `limparSessao`) em vez de ficar meio-logada — mostrando o
+     * nome da conta sem as funções dela, que era o estado antigo. Vale para os três
+     * contextos: todos leem a sessão por aqui.
+     */
+    async function lerSessao() {
+        const sessao = await sessaoGuardada();
+        if (!sessao)
+            return null;
+        if (sessaoVencida(sessao)) {
+            await limparSessao();
+            return null;
+        }
+        return sessao;
+    }
     /** Guarda a sessão E o perfil que veio na mesma resposta (login/cadastro). */
     async function guardarSessao(corpo) {
         const fonte = corpo && typeof corpo === 'object' ? corpo : null;
         const conta = fonte && fonte.conta ? fonte.conta : null;
+        const venceEm = prazoDoToken(fonte && fonte.token);
         const sessao = {
             token: fonte && fonte.token ? fonte.token : null,
             email: conta ? conta.email : null,
             papel: conta ? conta.papel : null,
-            expiraEm: (fonte && fonte.expiresAt) || null,
+            // O vencimento da SESSÃO é o do próprio token (o `expiresAt` da resposta é
+            // o da LICENÇA — outra coisa). Sem `exp` legível, fica o que o servidor
+            // mandou — ou nada.
+            expiraEm: venceEm != null ? new Date(venceEm).toISOString() : (fonte && fonte.expiresAt) || null,
         };
         const storage = extensaoApi();
         if (storage) {
             try {
-                await storage.set({
+                // Cópia das configurações do FREE, tirada no instante do login: o que está
+                // em `pegavaga_settings` agora é o free (a conta ainda não assumiu a tela).
+                // É esta cópia que volta no logout (ver `limparSessao`); daqui em diante,
+                // enquanto a conta estiver logada, `pegavaga_settings` é dela.
+                const guardadas = await storage.get(STORAGE.settings);
+                const patch = {
                     [STORAGE.sessao]: sessao,
                     [STORAGE.perfil]: { perfil: corpo, salvoEm: Date.now() },
-                });
+                };
+                const atuais = guardadas[STORAGE.settings];
+                if (atuais !== undefined)
+                    patch[STORAGE.settingsFree] = atuais;
+                await storage.set(patch);
             }
             catch (erro) {
                 /* sem storage: a sessão vale só nesta janela */
@@ -253,12 +322,49 @@ var apiShared = (() => {
         }
         return sessao;
     }
-    /** Esquece a sessão e o cache, e volta ao free local. */
+    /* Tudo o que é da CONTA (e só dela). Ao deslogar, sai tudo junto: o que a
+     * varredura juntou, as configurações de busca/agendador, a credencial e o cache
+     * do perfil. Ficam o endereço do backend (é do NAVEGADOR, não de quem entrou) e
+     * a cópia das configurações do free (`pegavaga_settings_free`) — de propósito
+     * FORA desta lista, porque é ela que sobrevive ao logout. Ver `guardarSessao` e
+     * `limparSessao`. */
+    const CHAVES_DA_CONTA = [
+        STORAGE.jobs,
+        STORAGE.meta,
+        STORAGE.settings,
+        STORAGE.run,
+        STORAGE.apps,
+        STORAGE.guard,
+        STORAGE.sessao,
+        STORAGE.perfil,
+    ];
+    /**
+     * Esquece a conta: a credencial, o cache do perfil e TUDO o que era dela —
+     * dados da varredura e configurações da conta. Só o endereço do backend fica (é
+     * do navegador, não de quem entrou).
+     *
+     * As configurações voltam a ser as do FREE: a cópia guardada no login
+     * (`pegavaga_settings_free`) entra de novo em `pegavaga_settings`, então quem
+     * sai reencontra a busca/cotas/agendador que tinha antes de entrar — e não o
+     * padrão de fábrica. Sem a cópia (nunca entrou ninguém), fica o padrão.
+     *
+     * É o único caminho de saída: o botão Sair, um 401/403 do servidor e a
+     * credencial que venceu sozinha (ver `sessaoVencida`) passam todos por aqui.
+     */
     async function limparSessao() {
         const storage = extensaoApi();
         if (storage) {
             try {
-                await storage.remove([STORAGE.sessao, STORAGE.perfil]);
+                // A cópia do FREE volta: o que era da conta (configurações, varredura,
+                // credencial) sai, e `pegavaga_settings` volta a ser o do free — que ficou
+                // guardado, intocado, o tempo todo (ver `guardarSessao`). A leitura vem
+                // ANTES do `remove` porque `pegavaga_settings` também está em
+                // `CHAVES_DA_CONTA`.
+                const guardadas = await storage.get(STORAGE.settingsFree);
+                await storage.remove(CHAVES_DA_CONTA);
+                if (guardadas[STORAGE.settingsFree] !== undefined) {
+                    await storage.set({ [STORAGE.settings]: guardadas[STORAGE.settingsFree] });
+                }
             }
             catch (erro) {
                 /* nada a fazer: o perfil em memória volta ao free logo abaixo */
@@ -287,6 +393,14 @@ var apiShared = (() => {
         const storage = extensaoApi();
         if (!storage)
             return aplicarDoServidor(null);
+        // Credencial vencida: desloga AQUI — levando o que era da conta (ver
+        // `limparSessao`) — antes de aplicar qualquer concessão. Este é o primeiro
+        // ponto por onde os três contextos passam ao acordar, então a extensão não
+        // fica meio-logada em nenhum deles.
+        if (sessaoVencida(await sessaoGuardada())) {
+            await limparSessao();
+            return aplicarDoServidor(null);
+        }
         let cache = null;
         try {
             const dados = await storage.get(STORAGE.perfil);
@@ -401,6 +515,40 @@ var apiShared = (() => {
         return { ok: true };
     }
     /**
+     * As configurações guardadas no SERVIDOR para a conta da sessão. É o que "puxa
+     * do banco" ao entrar: quem já usou a extensão em outro navegador reencontra a
+     * busca, as cotas e o agendador.
+     *
+     * Conta sem nada guardado devolve `{}` (não é erro): é o primeiro login, e quem
+     * decidir o que fazer é quem chamou. Sem sessão, a rota responde 401 e o free
+     * segue 100% local.
+     */
+    async function lerConfig() {
+        const resposta = await requisitar('/conta/config');
+        if (!resposta.ok)
+            return resposta;
+        const corpo = resposta.corpo;
+        const config = corpo && corpo.config && typeof corpo.config === 'object'
+            ? corpo.config
+            : {};
+        return { ok: true, config: config };
+    }
+    /**
+     * Grava as configurações no SERVIDOR, para a conta da sessão — o outro lado do
+     * `lerConfig`. Enquanto o free guarda só local, a conta guarda aqui: é o que faz
+     * as mesmas configurações aparecerem em qualquer navegador em que ela entrar.
+     */
+    async function salvarConfig(dados) {
+        const resposta = await requisitar('/conta/config', {
+            metodo: 'POST',
+            corpo: { config: dados || {} },
+        });
+        if (!resposta.ok)
+            return resposta;
+        const corpo = resposta.corpo;
+        return { ok: true, config: (corpo && corpo.config) || {} };
+    }
+    /**
      * Pergunta o plano de novo (o único jeito de ganhar/perder premium na tela).
      *
      * Sem sessão, nem chama a rede: free é local. Com sessão recusada (401/403), a
@@ -456,6 +604,9 @@ var apiShared = (() => {
      * direito real não muda: `sincronizarPlano` devolve o perfil de verdade na
      * próxima sincronização. De propósito, NÃO grava no cache: simulação não pode
      * virar o perfil que o content script aplica.
+     *
+     * O perfil chega com `simulado: true`, e é essa marca que faz a tela avisar que
+     * a edição mostrada não é a de produção (ver `PerfilEdicao.simulado`).
      */
     async function simularPlano(chave) {
         const resposta = await requisitar('/plano?simular=' + encodeURIComponent(chave));
@@ -526,8 +677,12 @@ var apiShared = (() => {
     function isLinkedInJobsUrl(url) {
         return isLinkedInUrl(url) && /\/jobs(\/|$|\?)/i.test(String(url));
     }
-    /** Monta a URL de busca de um termo, reaproveitando a URL base informada. */
-    function buildSearchUrl(baseUrl, term, location) {
+    /**
+     * Monta a URL de busca de um termo, reaproveitando a URL base informada. Com
+     * `onlyEasyApply`, liga o filtro do LinkedIn (`f_AL=true`), que traz só vagas
+     * de Candidatura Simplificada — o mesmo efeito de marcar esse filtro na tela.
+     */
+    function buildSearchUrl(baseUrl, term, location, onlyEasyApply) {
         let url;
         try {
             url = new URL(baseUrl || LINKEDIN_SEARCH_URL);
@@ -539,6 +694,8 @@ var apiShared = (() => {
             url.searchParams.set('keywords', term);
         if (location)
             url.searchParams.set('location', location);
+        if (onlyEasyApply)
+            url.searchParams.set('f_AL', 'true');
         return url.toString();
     }
     /* ------------------------------------------------------------------------ */
@@ -678,6 +835,7 @@ var apiShared = (() => {
             baseUrl: String(value.baseUrl || DEFAULT_SETTINGS.baseUrl).trim(),
             location: String(value.location || '').trim(),
             terms: normalizeTerms(value.terms),
+            onlyEasyApply: value.onlyEasyApply === true,
             apply: {
                 enabled: apply.enabled === true,
                 perTerm: num(apply.perTerm, 1, 500, defApply.perTerm),
@@ -773,11 +931,11 @@ var apiShared = (() => {
         let urls;
         let runTerms;
         if (terms.length) {
-            urls = terms.map((term) => buildSearchUrl(cfg.baseUrl, term, cfg.location));
+            urls = terms.map((term) => buildSearchUrl(cfg.baseUrl, term, cfg.location, cfg.onlyEasyApply));
             runTerms = terms.slice();
         }
         else {
-            urls = [buildSearchUrl(cfg.baseUrl, '', cfg.location)];
+            urls = [buildSearchUrl(cfg.baseUrl, '', cfg.location, cfg.onlyEasyApply)];
             runTerms = [''];
         }
         return {
@@ -795,6 +953,24 @@ var apiShared = (() => {
             sinceBreak: 0, // candidaturas desde a última pausa longa (ritmo humano)
             startedAt: new Date().toISOString(),
         };
+    }
+    /**
+     * A marca da fila que o AGENDADOR montou (ver `FilaExecucao.source`). Fica numa
+     * constante para o worker e a leitura não divergirem no dia em que alguém
+     * renomear a origem.
+     */
+    const ORIGEM_AGENDADOR = 'agendador';
+    /**
+     * A fila em andamento é do agendador? (fila sem `source` é do pop-up: varredura
+     * do usuário.)
+     *
+     * As duas varreduras são independentes: a janela de horário só governa a fila
+     * automática. A do usuário roda a qualquer hora — ela começa no clique do
+     * Iniciar e só termina quando a fila acaba, ele clica em Parar ou o LinkedIn
+     * sinaliza limite de uso.
+     */
+    function filaAutomatica(run) {
+        return Boolean(run && run.source === ORIGEM_AGENDADOR);
     }
     /* ------------------------------------------------------------------------ */
     /* Cotas de candidatura (dinâmicas)                                          */
@@ -969,69 +1145,32 @@ var apiShared = (() => {
     const APPLY_PENDING_LABEL = 'Adiada (sem cota ou fora do horário)';
     const APPLY_UNTOUCHED_LABEL = 'Não tentada';
     /* ------------------------------------------------------------------------ */
-    /* (TEMPORÁRIO) Pedido de ajuda ao usuário                                   */
+    /* Pedido de ajuda: ids do cartão no DESKTOP                                */
     /* ------------------------------------------------------------------------ */
     //
-    // Algumas vagas param num campo personalizado que a extensão ainda não sabe
-    // responder — ou demoram para confirmar o envio. Nesses casos o PegaVaga avisa
-    // na área de trabalho e pergunta o que fazer: esperar enquanto você preenche à
-    // mão, ou pular esta vaga e seguir para a próxima. Este bloco é o contrato do
-    // aviso (mensagens, textos, id e botões); o dia em que os campos personalizados
-    // forem tratados de verdade, tudo aqui — e quem usa — sai junto.
-    /** Motivos que disparam o aviso, com o texto que o usuário lê. */
-    const AJUDA_MOTIVOS = {
-        campos: 'O formulário parou num campo que a extensão não sabe responder.',
-        demora: 'O LinkedIn não confirmou a candidatura no tempo esperado.',
-    };
-    /** Botões do aviso, na ordem em que o Chrome os mostra. */
-    const AJUDA_BOTOES = ['Vou preencher à mão', 'Pular esta vaga'];
-    /** O que cada botão significa: `manual` espera você; `pular` segue adiante. */
-    const AJUDA_ACOES = ['manual', 'pular'];
-    /** Ação do botão pelo índice clicado ('' quando o índice não é nosso). */
-    function acaoDaAjuda(indice) {
-        const i = Number(indice);
-        return Number.isInteger(i) && i >= 0 && i < AJUDA_ACOES.length ? AJUDA_ACOES[i] : '';
-    }
+    // O cartão de resposta (ajuda.html) abre como JANELA POPUP do Chrome — sem
+    // barra de endereço, sem moldura: parece um cartão grande no canto inferior
+    // direito do desktop. Quem sabe o id que liga o cartão à aba é este bloco.
     /**
-     * Id do aviso na área de trabalho. Carrega a **aba de origem** de propósito: o
-     * clique pode acordar o service worker do zero, e é o id que diz para quem a
-     * decisão deve voltar (o `sender` da notificação original já não existe).
+     * Id do pedido. Carrega a **aba de origem** de propósito: a resposta pode
+     * acordar o service worker do zero (o Map em memória some), e é o id que
+     * diz para quem a decisão deve voltar. O mesmo id nomeia a janelinha aberta
+     * e a mensagem que a fecha.
      */
     function ajudaId(tabId, pedidoId) {
         return 'pegavaga-ajuda:' + String(tabId == null ? '' : tabId) + ':' + String(pedidoId || '');
     }
-    /** Lê o id do aviso: { tabId, pedidoId } — ou null se não for um aviso nosso. */
+    /** Lê o id do aviso: { tabId, pedidoId } — ou null se não for nosso. */
     function lerAjudaId(id) {
         const partes = String(id || '').split(':');
         if (partes.length !== 3 || partes[0] !== 'pegavaga-ajuda')
             return null;
         if (!partes[1] || !partes[2])
-            return null; // sem aba ou sem pedido não há resposta
+            return null; // sem aba ou sem pedido não há para avisar
         const tabId = Number(partes[1]);
         if (!Number.isInteger(tabId))
             return null;
         return { tabId, pedidoId: partes[2] };
-    }
-    /**
-     * Texto do aviso (título + corpo) que o worker mostra na notificação. Sem
-     * "detalhe técnico" aqui: o que o usuário precisa saber é qual vaga travou e
-     * quais são as duas escolhas.
-     */
-    function textoDaAjuda(dados) {
-        /* O aviso é montado a partir de uma mensagem do content script (JS): o que
-         * chega entra como `unknown` — o `as string` nos índices só declara o que o
-         * `String(...)` ao redor já garante. */
-        const info = dados && typeof dados === 'object' ? dados : {};
-        const vaga = [info.titulo, info.empresa].filter(Boolean).join(' — ');
-        const motivo = AJUDA_MOTIVOS[info.motivo] || AJUDA_MOTIVOS.campos;
-        const problema = info.problema ? ' Problema: ' + String(info.problema).slice(0, 120) + '.' : '';
-        return {
-            title: 'PegaVaga precisa de você (temporário)',
-            message: (vaga ? vaga + ': ' : '') +
-                motivo +
-                problema +
-                ' Você pode preencher esta vaga à mão (a automação espera) ou pular para a próxima.',
-        };
     }
     /* ------------------------------------------------------------------------ */
     /* Candidatura automática: motivos e resumo do relatório                     */
@@ -1057,6 +1196,18 @@ var apiShared = (() => {
      * LinkedIn).
      */
     const EASY_APPLY_LABEL = /candidatura simplificada|simplificada|easy apply|(no|pelo|com o|with) linkedin|linkedin (application|bug)/i;
+    /**
+     * Rótulo GENÉRICO de candidatura: o LinkedIn nem sempre anuncia o Easy Apply no
+     * rótulo — o botão às vezes é só "Candidatar-se"/"Apply"/"Se candidatar". Sem
+     * isto a classificação caía em `desconhecida` e a vaga era pulada SEM CLIQUE
+     * (ver `skipIfOffsite`), como se não fosse candidatável.
+     *
+     * Vale só para o RÓTULO do botão (nunca para o texto do insight da vaga): o
+     * externo continua sendo pego antes, pelo link embutido, pelo ícone de link
+     * externo e pelo `EXTERNAL_APPLY_LABEL`. Aqui só chega o botão de candidatura
+     * cujo rótulo genérico não denunciou ir para fora.
+     */
+    const GENERIC_APPLY_LABEL = /candidatar|candidate|\bapply\b/i;
     /** Resultado da leitura do botão de candidatura. */
     const APPLY_KINDS = {
         easy: 'simplificada', // Candidatura Simplificada: o formulário abre aqui dentro
@@ -1136,6 +1287,12 @@ var apiShared = (() => {
         if (label && EASY_APPLY_LABEL.test(label))
             return APPLY_KINDS.easy;
         if (insight && EASY_APPLY_LABEL.test(insight))
+            return APPLY_KINDS.easy;
+        /* Último recurso antes do "não sei": um rótulo genérico de candidatura
+         * ("Candidatar-se"/"Apply") SEM nenhum sinal de link externo acima. É o
+         * Easy Apply que o LinkedIn não anunciou com a palavra "simplificada" — sem
+         * isto a vaga era pulada sem clique. */
+        if (label && GENERIC_APPLY_LABEL.test(label))
             return APPLY_KINDS.easy;
         return APPLY_KINDS.unknown;
     }
@@ -1616,6 +1773,22 @@ var apiShared = (() => {
         // 5) Nada rodando.
         return light('ready', 'Pronta: nenhuma varredura em andamento.');
     }
+    /**
+     * O agendador está no comando agora? (janela aberta + "começar sozinho")
+     *
+     * Enquanto ele manda, a varredura é dele: o pop-up tira o botão Iniciar de cena
+     * e o rótulo avisa o que está acontecendo. Uma fila iniciada à mão continua
+     * sendo sua — enquanto ela existir, o agendador espera a vez (é a mesma
+     * independência que o worker e o content script respeitam).
+     */
+    function agendadorNoComando(schedule, run, when) {
+        const cfg = schedule || {};
+        if (!cfg.enabled || !cfg.autoStart)
+            return false;
+        if (!isWithinSchedule(when || new Date(), schedule))
+            return false;
+        return !(run && run.running === true && !filaAutomatica(run));
+    }
     /* ------------------------------------------------------------------------ */
     /* Espera por evento: o DOM avisa, ninguém fica perguntando de 250 em 250 ms  */
     /* ------------------------------------------------------------------------ */
@@ -1768,13 +1941,8 @@ var apiShared = (() => {
         RATE_LIMIT_PATTERNS,
         looksRateLimited,
         POPUP_GUARD,
-        AJUDA_MOTIVOS,
-        AJUDA_BOTOES,
-        AJUDA_ACOES,
-        acaoDaAjuda,
         ajudaId,
         lerAjudaId,
-        textoDaAjuda,
         num,
         normalizeTerms,
         isLinkedInUrl,
@@ -1788,8 +1956,11 @@ var apiShared = (() => {
         startOfDayMs,
         isWithinSchedule,
         nextScheduleStart,
+        agendadorNoComando,
         parseSettings,
         buildRunQueue,
+        ORIGEM_AGENDADOR,
+        filaAutomatica,
         computeQuota,
         jitter,
         applyOutcomeLabel,
@@ -1817,10 +1988,16 @@ var apiShared = (() => {
         aplicarPerfilSalvo,
         sincronizarPlano,
         lerSessao,
+        sessaoGuardada,
+        sessaoVencida,
+        prazoDoToken,
+        CHAVES_DA_CONTA,
         entrar,
         cadastrar,
         sair,
-        lerApi,
+        lerConfig,
+        salvarConfig,
+        apiUrl,
         salvarApi,
         listarLicencas,
         emitirLicenca,

@@ -48,7 +48,13 @@
   /* ------------------------------------------------------------------------ */
 
   const SHARED = window.PegaVagaShared || {};
+  const AJUDA_CAMPOS = window.PegaVagaAjuda || {};
   const STORAGE = SHARED.STORAGE || {};
+
+  /* Casamento de texto/opções do cartão de ajuda — mora em ajuda-campos.js (o
+   * manifest o carrega antes deste arquivo). */
+  const normalizar = AJUDA_CAMPOS.normalizar;
+  const escolherOpcao = AJUDA_CAMPOS.escolherOpcao;
 
   const STORAGE_JOBS_KEY = STORAGE.jobs || 'pegavaga_jobs';
   const STORAGE_META_KEY = STORAGE.meta || 'pegavaga_meta';
@@ -64,9 +70,6 @@
     CLEAR: 'PEGAVAGA_CLEAR',
     PROGRESS: 'PEGAVAGA_PROGRESS',
     RESUME: 'PEGAVAGA_RESUME',
-    AJUDA_PEDIDO: 'PEGAVAGA_AJUDA_PEDIDO',
-    AJUDA_RESPOSTA: 'PEGAVAGA_AJUDA_RESPOSTA',
-    AJUDA_FECHAR: 'PEGAVAGA_AJUDA_FECHAR',
   };
 
   const DEFAULT_APPLY = (SHARED.DEFAULT_SETTINGS && SHARED.DEFAULT_SETTINGS.apply) || {
@@ -102,6 +105,12 @@
 
   const isWithinSchedule = SHARED.isWithinSchedule || (() => true);
   const nextScheduleStart = SHARED.nextScheduleStart || (() => null);
+
+  /* A janela do agendador governa só a fila que ele montou: a varredura iniciada
+   * à mão é do usuário e roda a qualquer hora. O fallback existe só para o
+   * conteúdo não quebrar sem o shared.js. */
+  const filaAutomatica =
+    SHARED.filaAutomatica || ((run) => Boolean(run && run.source === 'agendador'));
 
   const buildQuota =
     SHARED.computeQuota ||
@@ -145,11 +154,6 @@
     ajudaEsperaMs: 300000, // quanto esperamos a sua resposta no aviso (5 min)
     ajudaPollMs: 500, // rede de segurança da espera (a resposta chega por mensagem)
     ajudaManualMs: 600000, // quanto esperamos você preencher à mão (10 min)
-    ajudaIntervaloMs: 60000, // no máximo um aviso por minuto (evita enxurrada)
-    // Campo recusado pelo LinkedIn: cada vaga é um caso novo, e é justamente
-    // aqui que o aviso não pode ser engolido (a vaga seria descartada em
-    // silêncio). Vale só um respiro curto entre um aviso e o seguinte.
-    ajudaIntervaloCamposMs: 10000,
 
     /* Ritmo humano / furtividade */
     humanRatio: 0.3, // variação padrão aplicada aos intervalos
@@ -245,11 +249,14 @@
    * porque o LinkedIn troca classes com frequência. */
   const APPLY_SEL = {
     button: [
+      // O id é o mais estável de todos (o LinkedIn o usa para o teste de UI):
+      // quando ele existe, é ESTE o botão da vaga aberta.
+      'button#jobs-apply-button-id',
+      'button[data-live-test-job-apply-button]',
       '.jobs-apply-button',
       'button.jobs-apply-button',
       '.jobs-details__main-content button.jobs-apply-button',
       '.jobs-unified-top-card__content--two-pane button.jobs-apply-button',
-      'button[data-live-test-job-apply-button]',
     ],
     // Qualquer dialog da página: é assim que achamos o formulário E os popups
     // que não são ele (pesquisa de avaliação, "salvar vaga", "seguir empresa"…).
@@ -341,8 +348,6 @@
      * existe, a automação está parada esperando a sua decisão. Sai junto com o
      * pedido de ajuda. */
     ajuda: null,
-    ajudaTardia: null, // resposta que chegou antes de a espera começar
-    ultimaAjuda: 0, // instante do último aviso (contém a enxurrada de avisos)
   };
 
   /* ------------------------------------------------------------------------ */
@@ -365,6 +370,41 @@
       root.querySelectorAll(selector).forEach((el) => found.add(el));
     }
     return Array.from(found);
+  }
+
+  /**
+   * Como `queryAllUnique`, mas **entra nos Shadow DOMs ABERTOS**.
+   *
+   * O LinkedIn monta parte do formulário em web components: o controle vive
+   * dentro de um `shadowRoot` e, de fora, `querySelectorAll` não o vê — o campo
+   * simplesmente "não existe" para a varredura. Era mais um jeito de o dropdown
+   * ficar de fora do pedido.
+   */
+  function queryAllProfundo(selector, root = document) {
+    const achados = [];
+
+    const varrer = (no) => {
+      let diretos = [];
+      try {
+        diretos = Array.from(no.querySelectorAll(selector));
+      } catch (erro) {
+        diretos = [];
+      }
+      for (const el of diretos) achados.push(el);
+
+      let todos = [];
+      try {
+        todos = Array.from(no.querySelectorAll('*'));
+      } catch (erro) {
+        todos = [];
+      }
+      for (const el of todos) {
+        if (el.shadowRoot) varrer(el.shadowRoot);
+      }
+    };
+
+    varrer(root);
+    return achados;
   }
 
   function clean(text) {
@@ -1067,8 +1107,52 @@
     return Boolean(el.getClientRects && el.getClientRects().length);
   }
 
+  /**
+   * Visível, OU um controle de formulário que EXISTE.
+   *
+   * O LinkedIn esconde o controle nativo atrás de um UI custom (o `<select>`
+   * `fb-dash-form-element__select-dropdown` fica sem caixa): ele existe, tem as
+   * opções e recebe a resposta — só não tem `getClientRects`. Exigir visibilidade
+   * era o que o descartava, e era por isso que a pergunta de lista chegava ao
+   * cartão como campo de TEXTO e sem opção nenhuma.
+   */
+  function visivelOuControle(el) {
+    if (!el) return false;
+    if (isVisible(el)) return true;
+    if (el.disabled) return false;
+
+    const tag = String(el.tagName || '').toLowerCase();
+    return tag === 'select' || tag === 'input' || tag === 'textarea';
+  }
+
+  /**
+   * O botão de candidatura da vaga que está aberta AGORA.
+   *
+   * Não basta o primeiro da página: o LinkedIn deixa no DOM o botão de vagas que
+   * já saíram da tela (o painel de detalhes é remontado a cada vaga), e um deles
+   * — invisível — era o "primeiro" na ordem do documento. O clique caía nele, o
+   * formulário não abria e a varredura lia aquilo como "vaga sem candidatura":
+   * era o "não está clicando em candidatura", com o botão na tela.
+   *
+   * Então: entre os VISÍVEIS e habilitados, prefere o que pertence à vaga aberta
+   * (`data-job-id` = id do card selecionado); sem essa pista, o primeiro visível.
+   */
   function findApplyButton() {
-    return queryFirst(APPLY_SEL.button);
+    const botoes = queryAllUnique(APPLY_SEL.button).filter(isVisible);
+    if (!botoes.length) return null;
+
+    const card = queryFirst(SEL.selectedCard);
+    const idAberto = card ? getJobId(card) : '';
+
+    if (idAberto) {
+      const bate = botoes.find((botao) => {
+        const id = botao.getAttribute && botao.getAttribute('data-job-id');
+        return id && String(id) === String(idAberto);
+      });
+      if (bate) return bate;
+    }
+
+    return botoes[0];
   }
 
   /**
@@ -1266,9 +1350,29 @@
       if (isApplyForm(dialog)) continue;
       if (isRestrictionNotice(dialog)) continue;
 
+      // Dialog com campos que ainda não deu para classificar: NÃO fechamos. Pode
+      // ser a nossa própria candidatura carregando (o LinkedIn monta o formulário
+      // em pedaços, e entre as etapas o rodapé some por um instante). Fechá-lo
+      // descartaria a candidatura — e era assim que a vaga se perdia antes de o
+      // cartão de ajuda aparecer.
+      if (dialogKind(dialog) === SHARED.DIALOG_KINDS.unknown && dialogTemCampos(dialog)) {
+        continue;
+      }
+
       return dialog;
     }
     return null;
+  }
+
+  /** O dialog tem controle de formulário visível? (formulário carregando, ex.) */
+  function dialogTemCampos(dialog) {
+    try {
+      return Array.from(
+        dialog.querySelectorAll('input:not([type="hidden"]), select, textarea, [role="combobox"]')
+      ).some(isVisible);
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
@@ -1585,20 +1689,21 @@
     }
 
     try {
-      // Só atributos estáveis: o rótulo visível (via `fieldLabel`) pode incluir a
-      // mensagem de erro, e aí a assinatura voltaria a mudar à toa.
+      // Só atributos estáveis — e NUNCA o `aria-label`: quando o LinkedIn mostra o
+      // erro de validação ele reescreve o `aria-label` do campo, e a assinatura
+      // mudava sozinha. Com isso a contagem de tentativas zerava a cada clique e
+      // o pedido de ajuda nunca disparava: a vaga era descartada em silêncio.
+      // `name`/`id`/`type` (e o texto do `legend`) não mudam com o erro.
       campos = Array.from(
         modal.querySelectorAll('input, select, textarea, [role="combobox"], fieldset legend')
       )
-        .map((campo) =>
-          normalize(
-            campo.getAttribute('name') ||
-              campo.getAttribute('id') ||
-              campo.getAttribute('aria-label') ||
-              campo.getAttribute('type') ||
-              ''
-          )
-        )
+        .map((campo) => {
+          const tag = String(campo.tagName || '').toLowerCase();
+          if (tag === 'legend') return normalize(campo.textContent || ''); // título do passo
+          return normalize(
+            campo.getAttribute('name') || campo.getAttribute('id') || campo.getAttribute('type') || ''
+          );
+        })
         .join('|');
     } catch (error) {
       campos = '';
@@ -1692,37 +1797,124 @@
     return Boolean(confirmed);
   }
 
-  /** Rótulo visível de um campo do formulário (para o relatório de motivos). */
+  /* Linhas que NÃO são a pergunta do campo: "Obrigatório", o texto do placeholder
+   * ("Selecionar opção") e a instrução/erro ("Insira uma resposta válida",
+   * "Insira um número decimal com mais de 0.0"). Antes o rótulo do campo saía
+   * daqui — o cartão mostrava "Selecionar opção" em vez da pergunta. */
+  const RUIDO_EXATO_RE =
+    /^(obrigat[óo]rio|required|opcional|optional|selecione|selecionar|escolha|escolher|select|choose|selecionar op[çc][ãa]o|select an option|choose an option|escolha uma op[çc][ãa]o)$/i;
+  const RUIDO_INSTRUCAO_RE = /^(insira|informe|digite|preencha|enter|type|provide|apenas n[úu]meros?)\b/i;
+
+  /**
+   * A PRIMEIRA linha do texto que parece a pergunta. O bloco do Easy Apply junta
+   * pergunta + "Obrigatório" + placeholder + erro no mesmo `textContent`: aqui a
+   * gente corta o ruído e devolve só a pergunta (é o rótulo que o cartão mostra).
+   */
+  function perguntaDoTexto(texto) {
+    const linhas = String(texto || '')
+      .split(/\n+/)
+      .map((linha) => clean(linha))
+      .filter(Boolean);
+
+    for (const linha of linhas) {
+      if (linha.length > 300) continue; // parágrafo de ajuda, não pergunta
+      if (RUIDO_EXATO_RE.test(linha) || RUIDO_INSTRUCAO_RE.test(linha)) continue;
+      return linha;
+    }
+    return linhas.length ? linhas[0] : '';
+  }
+
+  /**
+   * Rótulo visível de um campo do formulário — a PERGUNTA, na ordem em que o
+   * LinkedIn a entrega: `aria-labelledby` (o mais fiel), `aria-label`, `<label>`,
+   * o rótulo do bloco do Easy Apply e, só no fim, o container e o placeholder.
+   */
   function fieldLabel(field) {
-    let direct = '';
+    if (!field) return '';
+
+    const limite = (texto) => perguntaDoTexto(texto).slice(0, 300);
+    const get = (nome) => {
+      try {
+        return (field.getAttribute && field.getAttribute(nome)) || '';
+      } catch (error) {
+        return '';
+      }
+    };
 
     try {
-      direct = clean(
-        (field.getAttribute && field.getAttribute('aria-label')) ||
-          (field.getAttribute && field.getAttribute('placeholder'))
-      );
-    } catch (error) {
-      direct = '';
-    }
+      // 1) `aria-labelledby` aponta para o elemento com a pergunta.
+      const ids = String(get('aria-labelledby')).split(/\s+/).filter(Boolean);
+      for (const id of ids) {
+        const alvo = (field.ownerDocument || document).getElementById(id);
+        if (alvo) {
+          const texto = limite(alvo.textContent);
+          if (texto) return texto;
+        }
+      }
 
-    if (direct) return direct.slice(0, 60);
+      // 2) `aria-label` — desde que não seja o ruído do próprio campo.
+      const aria = clean(get('aria-label'));
+      if (aria && !RUIDO_EXATO_RE.test(aria) && !RUIDO_INSTRUCAO_RE.test(aria)) {
+        return aria.slice(0, 300);
+      }
 
-    try {
-      if (field.labels && field.labels.length) return clean(field.labels[0].textContent).slice(0, 60);
-    } catch (error) {
-      /* sem labels: tentamos o container abaixo */
-    }
+      // 3) `<label for=…>`.
+      if (field.labels && field.labels.length) {
+        const texto = limite(field.labels[0].textContent);
+        if (texto) return texto;
+      }
 
-    try {
+      /* 4) O bloco da PERGUNTA — e só ele.
+       *
+       * Nunca o `<fieldset>` da ETAPA: a etapa "Perguntas adicionais" é um bloco
+       * com várias perguntas, e usá-lo como rótulo dava a MESMA pergunta (a
+       * primeira) para todos os campos. Com o dedupe por rótulo, isso deixava um
+       * único campo no cartão — era o "ele só trouxe o campo de texto livre". */
+      const bloco =
+        field.closest && field.closest('.fb-dash-form-element, .jobs-easy-apply-form-element');
+
+      if (bloco) {
+        const dentro = bloco.querySelector(
+          '.fb-dash-form-element__label, .artdeco-text-input--label, legend, label'
+        );
+        if (dentro) {
+          const texto = limite(dentro.textContent);
+          if (texto) return texto;
+        }
+
+        // O bloco inteiro vale só quando ele tem UM controle (é o bloco de UMA
+        // pergunta). A primeira linha sem ruído é a pergunta.
+        const controles = bloco.querySelectorAll(
+          'input:not([type="hidden"]), select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]'
+        );
+        if (controles.length <= 1) {
+          const texto = limite(bloco.textContent);
+          if (texto) return texto;
+        }
+      }
+
+      // 4c) Grupo de rádio/checkbox: a pergunta é o `<legend>` do fieldset.
+      const grupo = field.closest && field.closest('fieldset');
+      const legenda = grupo && grupo.querySelector('legend');
+      if (legenda) {
+        const texto = limite(legenda.textContent);
+        if (texto) return texto;
+      }
+
+      // 5) O container do PRÓPRIO controle (nunca um `fieldset`/`div` genérico).
       const container =
         field.closest &&
-        field.closest(
-          '.fb-dash-form-element, .jobs-easy-apply-form-element, .artdeco-text-input--container, label, fieldset'
-        );
+        field.closest('.artdeco-text-input--container, .artdeco-text-input--label, label');
+      if (container) {
+        const texto = limite(container.textContent);
+        if (texto) return texto;
+      }
 
-      if (container) return clean(container.textContent).slice(0, 60);
+      // 6) Último recurso: o placeholder (é dica, não pergunta — mas melhor que nada).
+      const ph = clean(get('placeholder'));
+      if (ph && !RUIDO_EXATO_RE.test(ph) && !RUIDO_INSTRUCAO_RE.test(ph)) return ph.slice(0, 300);
     } catch (error) {
-      /* sem closest: desistimos do rótulo */
+      /* campo quebrado: sem rótulo */
     }
 
     return '';
@@ -1820,7 +2012,7 @@
   }
 
   /** Dados da vaga que o aviso mostra (título, empresa e o que travou). */
-  function ajudaContexto(id, motivo, problema) {
+  function ajudaContexto(id, motivo, problema, campos) {
     const job = (id && state.jobs[id]) || {};
 
     return {
@@ -1828,91 +2020,1026 @@
       titulo: String(job.title || '').slice(0, 80),
       empresa: String(job.company || '').slice(0, 60),
       problema: String(problema || '').slice(0, 120),
+      // Campos travados já descritos ({ rotulo, tipo, opcoes }) para a janelinha
+      // desenhar o controle CERTO com as opções originais do LinkedIn (ver
+      // `camposTravados`). Preserva o tipo e as opções — não vira texto puro.
+      campos: Array.isArray(campos)
+        ? campos
+            .filter((c) => c && typeof c === 'object')
+            .slice(0, 8) // a etapa pode ter várias perguntas: cabem todas no cartão
+            .map((c) => ({
+              // 120: a pergunta vai INTEIRA (o cartão quebra linha em vez de cortar).
+              rotulo: String(c.rotulo || '').slice(0, 300),
+              tipo: String(c.tipo || 'texto'),
+              opcoes: Array.isArray(c.opcoes)
+                ? c.opcoes.map((o) => String(o).slice(0, 80)).slice(0, 30)
+                : [],
+            }))
+        : [],
     };
   }
 
-  /** Pede ao service worker para mostrar o aviso. `{ ok, id }` ('' = não deu). */
-  function avisarNoSistema(dados) {
-    return new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage(Object.assign({ type: MSG.AJUDA_PEDIDO }, dados), (resposta) => {
-          resolve(resposta && resposta.ok ? resposta : null);
-        });
-      } catch (error) {
-        resolve(null);
-      }
-    });
-  }
+  /**
+   * O input controlável de um elemento marcado como inválido. Alguns sinais do
+   * `APPLY_SEL.invalid` são o próprio `<input>/<select>`, outros são o container
+   * do erro (`.fb-dash-form-element--error`…). Aqui normalizamos: devolve o campo
+   * de verdade (ou null quando não há um).
+   */
+  function resolverCampo(el) {
+    if (!el) return null;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return el;
 
-  /** Some com o aviso da área de trabalho (a decisão já foi tomada). */
-  function fecharAviso(avisoId) {
     try {
-      chrome.runtime.sendMessage(
-        { type: MSG.AJUDA_FECHAR, avisoId: avisoId },
-        () => void chrome.runtime.lastError
+      const dentro = el.querySelector(
+        'input:not([type="hidden"]), select, textarea, ' +
+          '[role="combobox"], [aria-haspopup="listbox"], [aria-expanded]'
       );
+      return dentro || null;
     } catch (error) {
-      /* sem aviso aberto: nada a fazer */
+      return null;
     }
   }
 
   /**
-   * Avisa na área de trabalho e espera a sua decisão.
+   * Descreve um campo para a janelinha: `{ rotulo, tipo, opcoes }`.
+   *   - `tipo`: `'texto'` | `'select'` | `'radio'` | `'checkbox'`;
+   *   - `opcoes`: as opções originais (texto do `<select>`, rótulos dos rádios…).
+   */
+  function descreverCampo(campo, modal) {
+    const rotulo = fieldLabel(campo) || '';
+    const tag = String(campo.tagName || '').toLowerCase();
+    const type = String(campo.type || '').toLowerCase();
+
+    if (tag === 'select') {
+      let opcoes = Array.from(campo.options || [])
+        .filter((o) => String(o.value) !== '' && !o.disabled)
+        .map((o) => clean(o.textContent) || String(o.value))
+        .filter(Boolean)
+        .filter((texto) => !PLACEHOLDER_RE.test(texto)); // tira o "Selecionar opção"
+
+      /* Sem opções de verdade e a pergunta é de sim/não? O LinkedIn oferece
+       * exatamente "Sim"/"Não" nesses dropdowns — melhor mostrá-los do que
+       * deixar o campo sem escolha nenhuma no cartão. */
+      if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) opcoes = ['Sim', 'Não'];
+
+      return { rotulo, tipo: 'select', opcoes };
+    }
+
+    /* Combobox/dropdown custom do Easy Apply: é uma div/botão que abre uma
+     * lista (`listbox`) — sem <select>, então as opções se leem da lista
+     * aberta ou dos itens escondidos no DOM. Sai como 'select' para a
+     * janelinha (um <select> com as opções originais, como os outros).
+     *
+     * `ehPerguntaDeLista` é a rede de segurança: além dos sinais de ARIA, um
+     * controle cujo texto visível é o placeholder ("Selecionar opção") É uma
+     * lista — qualquer que seja a marcação que o LinkedIn usou naquela versão. O
+     * `<input readonly>` entra aqui também: num formulário de candidatura ele é
+     * um controle de ESCOLHA (não se digita, se clica). */
+    if (ehPerguntaDeLista(campo) || (tag === 'input' && campo.readOnly)) {
+      // Só o TEXTO de cada opção: antes esta lista ia com os objetos
+      // (`{ texto, value, el }`) e o cartão mostrava "[object Object]".
+      let opcoes = opcoesDoCombo(modal, campo)
+        .map((o) => clean(o.texto || ''))
+        .filter(Boolean);
+
+      if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) opcoes = ['Sim', 'Não'];
+
+      return { rotulo, tipo: 'select', opcoes };
+    }
+
+    if (type === 'radio') {
+      const grupo = radioGroup(modal || document, campo);
+      const opcoes = grupo
+        .map((f) => fieldLabel(f) || String(f.value || ''))
+        .map((t) => clean(t))
+        .filter(Boolean);
+      return { rotulo, tipo: 'radio', opcoes };
+    }
+
+    if (type === 'checkbox') {
+      // Binário: marcar ou não. O rótulo costuma ser a pergunta ("Autorizo…").
+      return { rotulo, tipo: 'checkbox', opcoes: ['Sim', 'Não'] };
+    }
+
+    // input/textarea de texto (texto, número, e-mail…).
+    return { rotulo, tipo: 'texto', opcoes: [] };
+  }
+
+  /**
+   * O elemento pertence ao formulário de candidatura?
    *
-   * Devolve `'manual'` (você vai preencher à mão: a automação para e respeita),
-   * `'pular'` (a vaga é descartada e a varredura segue para a próxima) ou `''`
-   * (ninguém respondeu a tempo — quem chamou decide o que fazer).
+   * Nem sempre o `modal` guardado CONTÉM o campo: o LinkedIn monta o Easy Apply
+   * num **portal do React**, e o conteúdo pode viver noutro nó do documento (foi
+   * assim que um `<select required>` ficou fora da varredura, que só olhava para
+   * dentro do `modal`). Aqui vale o que está dentro do `modal` OU dentro de
+   * qualquer modal de candidatura.
+   */
+  function pertenceAoFormulario(el, modal) {
+    if (!el) return false;
+    if (modal && modal.contains && modal.contains(el)) return true;
+
+    try {
+      return Boolean(
+        el.closest &&
+          el.closest('.jobs-easy-apply-modal, [data-test-modal-container], .artdeco-modal')
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /** O campo já tem resposta? (o que está respondido não trava a etapa) */
+  function jaRespondido(el) {
+    if (!el) return true;
+
+    const tag = String(el.tagName || '').toLowerCase();
+    const type = String(el.type || '').toLowerCase();
+
+    if (tag === 'select') return !selectVazio(el);
+    if (type === 'radio') return radioGroup(document, el).some((f) => f.checked);
+    if (type === 'checkbox') return el.checked;
+    if (textoEhPlaceholderDeLista(el)) return false;
+    if (el.getAttribute && el.getAttribute('contenteditable') === 'true') {
+      return clean(el.textContent || '') !== '';
+    }
+
+    return el.value != null && String(el.value).trim() !== '';
+  }
+
+  /**
+   * Os controles que mostram o placeholder de lista ("Selecionar opção").
+   *
+   * Rede de segurança do reconhecimento: o LinkedIn já usou `<select>`, `<input
+   * readonly role="combobox">` e `<div role="button">` para a MESMA pergunta — e
+   * em algumas versões não sobra sinal de ARIA nenhum. O que não muda é o texto
+   * na tela, e é ele que denuncia "aqui é uma lista sem resposta". Devolve o
+   * GATILHO (não o `<span>` de dentro dele).
+   */
+  function controlesDePlaceholder(modal) {
+    const achados = [];
+    const vistos = new Set();
+
+    try {
+      for (const el of queryAllProfundo('button, [role], input[readonly], span, div', modal)) {
+        if (!isVisible(el)) continue;
+
+        const texto = clean(el.textContent || '');
+        if (!texto || texto.length > 40 || !PLACEHOLDER_TEXTO_RE.test(texto)) continue;
+
+        const controle =
+          (el.closest &&
+            el.closest(
+              'button, [role="button"], [role="combobox"], [aria-haspopup], [aria-expanded], input[readonly]'
+            )) ||
+          el;
+
+        if (vistos.has(controle)) continue;
+        vistos.add(controle);
+        achados.push(controle);
+      }
+    } catch (error) {
+      /* DOM mudou no meio: vale o que deu para achar */
+    }
+
+    return achados;
+  }
+
+  /**
+   * Campos travados com o que a janelinha precisa para desenhá-los: até `TETO`,
+   * cada um `{ rotulo, tipo, opcoes }`. É o mesmo sinal de `invalidFields`, mas
+   * guardando o elemento para podermos reaplicar a resposta no campo certo.
+   */
+  function camposTravados(modal) {
+    if (!modal) return [];
+
+    const vistos = [];
+    const vistosEl = new Set(); // não repete o MESMO campo
+    const TETO = 12; // a etapa pode ter várias perguntas: cabem todas (o cartão rola)
+
+    /* O dedupe é por ELEMENTO, e só. Antes havia também um dedupe por rótulo — e
+     * bastava dois campos caírem com o mesmo texto (ou com texto vazio, quando a
+     * chave virava `tipo:`) para o segundo ser descartado: o cartão trazia UM
+     * campo e os outros sumiam. As perguntas da etapa têm de chegar TODAS juntas
+     * no mesmo pedido. */
+    const anotar = (campo) => {
+      // `visivelOuControle`: o controle nativo que o LinkedIn esconde atrás do
+      // UI custom (o `<select>` sem caixa) também conta.
+      if (!campo || !visivelOuControle(campo) || vistos.length >= TETO) return;
+      if (vistosEl.has(campo)) return;
+      vistosEl.add(campo);
+
+      vistos.push({ descricao: descreverCampo(campo, modal), campo: campo });
+    };
+
+    try {
+      /* 1) O sinal forte: campos que o LinkedIn JÁ marcou como recusados
+       * (`[aria-invalid]`, classes de erro, `:invalid` do próprio navegador). */
+      for (const el of queryAllUnique(APPLY_SEL.invalid, modal)) {
+        if (!isVisible(el)) continue; // campo escondido (outra etapa) não trava
+        anotar(resolverCampo(el));
+        if (vistos.length >= TETO) break;
+      }
+
+      /* 2) Complemento de alta confiança — roda SEMPRE, mesmo com campos já
+       * marcados como inválidos:
+       *
+       *   - o controle que mostra o placeholder de lista ("Selecionar opção") é
+       *     uma pergunta SEM resposta, e o LinkedIn não o marca como `:invalid`
+       *     (não é um campo nativo obrigatório);
+       *   - o campo nativo `required`/`aria-required` que ficou em branco.
+       *
+       * Era aqui que a pergunta de lista sumia: quando os textos obrigatórios
+       * vinham marcados como inválidos, a varredura "do que falta" nem rodava —
+       * e o select não aparecia no cartão. */
+      for (const el of controlesDePlaceholder(modal)) {
+        if (vistos.length >= TETO) break;
+        anotar(el);
+      }
+
+      for (const el of queryAllUnique(
+        'input[required], select[required], textarea[required], [aria-required="true"]',
+        modal
+      )) {
+        if (vistos.length >= TETO) break;
+        if (!isVisible(el) || el.disabled) continue;
+        if (el.value != null && String(el.value).trim() !== '') continue;
+        anotar(el);
+      }
+
+      /* 2b) E os OBRIGATÓRIOS do DOCUMENTO, restritos ao formulário de
+       * candidatura. O conteúdo do Easy Apply pode estar num portal do React,
+       * fora do nó do `modal` — e era por isso que um
+       * `<select required aria-required="true">` não aparecia em varredura
+       * nenhuma (nem nesta, nem na dos rótulos). */
+      for (const el of queryAllProfundo(
+        'select[required], input[required], textarea[required], [aria-required="true"]'
+      )) {
+        if (vistos.length >= TETO) break;
+        if (!pertenceAoFormulario(el, modal)) continue;
+        if (!visivelOuControle(el) || el.disabled) continue;
+        if (jaRespondido(el)) continue;
+        anotar(el);
+      }
+
+      /* 2c) E os controles de ESCOLHA ÚNICA do LinkedIn, pelos nomes que ele usa
+       * (`select.fb-dash-form-element__select-dropdown`,
+       * `[data-test-text-entity-list-form-select]`, `id` com `multipleChoice`).
+       * É o sinal mais direto do dropdown que trava a etapa — e cobre também o
+       * que NÃO é marcado como obrigatório. */
+      for (const el of queryAllProfundo(
+        'select.fb-dash-form-element__select-dropdown, [data-test-text-entity-list-form-select], ' +
+          'select[id*="multipleChoice"]'
+      )) {
+        if (vistos.length >= TETO) break;
+        if (!pertenceAoFormulario(el, modal)) continue;
+        if (!visivelOuControle(el) || el.disabled) continue;
+        if (jaRespondido(el)) continue;
+        anotar(el);
+      }
+
+      /* 3) A varredura COMPLETA — roda SEMPRE.
+       *
+       * Ela lê o formulário inteiro e anota o que ainda NÃO foi respondido: um
+       * select sem escolha, um campo em branco, um rádio sem marcação. Antes ela
+       * só rodava quando NENHUM campo vinha marcado como inválido — e como o
+       * LinkedIn marca `:invalid` só os nativos obrigatórios, bastava uma etapa
+       * com textos obrigatórios em branco para ela ser pulada e a pergunta de
+       * lista ficar de fora. Agora não há mais esse portão: TODOS os campos sem
+       * resposta entram no mesmo pedido. */
+      {
+        // Varre tudo que pode pedir resposta no formulário — campos nativos e
+        // controles customizados do LinkedIn (o dropdown é um `<select>`, um
+        // `<button>` ou um `<input readonly>`, e nem sempre tem sinal de ARIA).
+        const campos = queryAllProfundo(
+          'input, select, textarea, [contenteditable="true"], ' +
+            '[role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
+          modal
+        ).filter(isVisible);
+
+        let listboxVisto = false; // o dropdown é filho do botão: conta como um só
+
+        for (const campo of campos) {
+          if (vistos.length >= TETO) break;
+
+          const tag = String(campo.tagName || '').toLowerCase();
+          const type = String(campo.type || '').toLowerCase();
+          if (
+            tag === 'input' &&
+            (type === 'hidden' ||
+              type === 'submit' ||
+              type === 'button' ||
+              type === 'file' || // currículo: não é pergunta, e não dá para digitar
+              type === 'image' ||
+              type === 'reset')
+          ) {
+            continue;
+          }
+
+          /* Combobox/dropdown custom: parece fechado mas tem opções (abre com
+           * "Adicionar…" ou mostra o texto atual). É o controle mais comum do
+           * Easy Apply de hoje — e o que mais passa batido. `ehCombo` cobre o
+           * gatilho em `<button>`, em `<div role="button">` e no `<input
+           * role="combobox" readonly>` do artdeco.
+           *
+           * Vem ANTES do teste de `readonly`: aquele input é readonly de
+           * propósito (não se digita, se escolhe) e descartá-lo aqui era o que
+           * fazia a pergunta de lista sumir do cartão. */
+          if (ehCombo(campo)) {
+            if (campo.disabled) continue;
+
+            // O container da lista vive logo ao lado no DOM: não conta duas vezes.
+            if (campo.getAttribute('role') === 'listbox') {
+              if (listboxVisto) continue;
+              listboxVisto = true;
+            }
+            // Já tem resposta escolhida (texto que não é placeholder)? Segue.
+            if (comboTemValor(campo)) continue;
+            anotar(campo);
+            continue;
+          }
+
+          /* Lista SEM sinal de ARIA: o que denuncia é o texto/placeholder
+           * ("Selecionar opção"). Vem ANTES do teste de `readonly`, porque o
+           * dropdown do artdeco costuma ser um `<input readonly>` — e o
+           * `readOnly` (que só impede digitar) o descartaria aqui. */
+          if (textoEhPlaceholderDeLista(campo)) {
+            if (!campo.disabled) anotar(campo);
+            continue;
+          }
+
+          /* `<input readonly>` num formulário de candidatura é controle de
+           * ESCOLHA (o dropdown/datepicker do artdeco, que não se digita: se
+           * clica). Sem `role`/`aria`, era o `readOnly` que o descartava — e era
+           * ESTE o campo que sumia do pedido. */
+          if (tag === 'input' && campo.readOnly) {
+            const temValor = campo.value != null && String(campo.value).trim() !== '';
+            if (!temValor || textoEhPlaceholderDeLista(campo)) anotar(campo);
+            continue;
+          }
+
+          if (campo.disabled || campo.readOnly) continue;
+
+          if (type === 'radio') {
+            // Só o primeiro do grupo representa a pergunta; um já marcado é
+            // resposta dada (não trava nada).
+            const grupo = radioGroup(modal, campo);
+            if (grupo.length && grupo[0] !== campo) continue;
+            if (grupo.some((f) => f.checked)) continue;
+            anotar(campo);
+            continue;
+          }
+
+          if (type === 'checkbox') {
+            if (campo.checked) continue; // já marcado
+            // Checkbox sem pergunta (rótulo) é quase sempre opt-in de marketing:
+            // não é isso que trava a candidatura.
+            if (!fieldLabel(campo)) continue;
+            anotar(campo);
+            continue;
+          }
+
+          if (tag === 'select') {
+            // Já escolhido? Segue (ver `selectVazio`: o placeholder pode ter
+            // valor não-vazio). Sem opções legíveis NÃO pulamos: o campo ainda
+            // travou a etapa e precisa aparecer no cartão (com Sim/Não quando for
+            // pergunta de sim/não — ver `descreverCampo`).
+            if (!selectVazio(campo)) continue;
+            anotar(campo);
+            continue;
+          }
+
+          // Texto/número/e-mail (e o `contenteditable`, que o LinkedIn usa em
+          // alguns editores). Um botão ou uma div que caiu no `[aria-expanded]`
+          // da varredura não é campo — viraria "pergunta" fantasma no cartão.
+          const editavel = campo.getAttribute && campo.getAttribute('contenteditable') === 'true';
+          if (tag !== 'input' && tag !== 'textarea' && !editavel) continue;
+
+          const temValor = editavel
+            ? clean(campo.textContent || '') !== ''
+            : campo.value != null && String(campo.value).trim() !== '';
+          if (temValor) continue;
+          anotar(campo);
+        }
+      }
+    } catch (error) {
+      /* DOM mudou no meio: mostra o que deu para anotar até aqui */
+    }
+
+    // A descrição é o que a janelinha desenha. O `_campo` viaja junto (fora do
+    // payload: `ajudaContexto` só copia rotulo/tipo/opcoes) porque é com ele que
+    // `camposTravadosCompletos` abre o dropdown e lê as opções que o LinkedIn só
+    // monta na hora de abrir.
+    const encontrados = vistos.map((item) =>
+      Object.assign({}, item.descricao, { _campo: item.campo })
+    );
+
+    /* Rede de segurança final: as perguntas que os reconhecedores acima não
+     * pegaram (ex.: o dropdown do artdeco sem ARIA) entram pelo RÓTULO, que está
+     * sempre na tela. Sem isto, uma etapa podia trazer menos campos do que
+     * perguntas — e era exatamente o "não trouxe o select". */
+    for (const extra of camposPorPergunta(modal, vistosEl)) {
+      if (encontrados.length >= TETO) break;
+      encontrados.push(extra);
+    }
+
+    /* A ORDEM do cartão é a ORDEM DA PÁGINA. A descoberta não segue a ordem do
+     * DOM (o campo achado pela rede de segurança entrava por último), então
+     * ordenamos pelo `compareDocumentPosition`: a lista fica na mesma sequência
+     * das perguntas no LinkedIn. */
+    try {
+      const POS_PRECEDING = 2; // y vem antes de x
+      const POS_FOLLOWING = 4; // y vem depois de x
+      encontrados.sort((a, b) => {
+        const x = a && a._campo;
+        const y = b && b._campo;
+        if (!x || !y || x === y || typeof x.compareDocumentPosition !== 'function') return 0;
+        const pos = x.compareDocumentPosition(y);
+        if (pos & POS_FOLLOWING) return -1;
+        if (pos & POS_PRECEDING) return 1;
+        return 0;
+      });
+    } catch (erro) {
+      /* ordenar é cortesia: sem isso, vale a ordem da descoberta */
+    }
+
+    /* Diagnóstico barato e útil: o que foi reconhecido nesta etapa. Quando um
+     * campo não aparece no cartão, é esta linha que diz se ele nem foi achado ou
+     * se foi achado com o tipo errado. */
+    console.log(
+      '[PegaVaga] campos reconhecidos nesta etapa:',
+      encontrados.map((c) => ({
+        rotulo: c.rotulo,
+        tipo: c.tipo,
+        opcoes: (c.opcoes || []).length,
+        tag: (c._campo && c._campo.tagName) || '?',
+      }))
+    );
+
+    /* Auditoria da etapa — só diagnóstico: o que a varredura VÊ (blocos, perguntas
+     * e os controles de cada uma), quantos campos de cada tipo e quantos hosts de
+     * Shadow DOM. Quando um campo não entra no cartão, é esta linha que diz o que
+     * ele é na página. */
+    try {
+      const blocos = queryAllProfundo(
+        '.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset',
+        modal
+      );
+
+      console.log('[PegaVaga] auditoria da etapa:', {
+        blocos: blocos.length,
+        perguntas: blocos.slice(0, 12).map((b) => ({
+          texto: clean(b.textContent).slice(0, 50),
+          controles: queryAllProfundo('input, select, textarea, [role], button, [contenteditable]', b)
+            .map((el) => {
+              const tag = String(el.tagName || '?').toLowerCase();
+              const role = el.getAttribute && el.getAttribute('role');
+              const tipo = el.getAttribute && el.getAttribute('type');
+              return tag + (tipo ? ':' + tipo : '') + (role ? '[' + role + ']' : '');
+            })
+            .slice(0, 8),
+        })),
+        inputs: queryAllProfundo('input', modal).length,
+        selects: queryAllProfundo('select', modal).length,
+        combos: queryAllProfundo('[role="combobox"], [aria-haspopup], [aria-expanded]', modal).length,
+        shadowHosts: queryAllProfundo('*', modal).filter((el) => el.shadowRoot).length,
+      });
+    } catch (erro) {
+      /* auditoria é só diagnóstico: se falhar, o pedido segue igual */
+    }
+
+    return encontrados;
+  }
+
+  /**
+   * Rede de segurança FINAL: percorre os RÓTULOS das perguntas da etapa e garante
+   * que cada uma entrou no pedido.
+   *
+   * O rótulo está SEMPRE no DOM (é o texto que a pessoa lê: "Você possui
+   * disponibilidade…?"). Se o controle dele não foi reconhecido por nenhuma outra
+   * via — o que acontece com o dropdown do artdeco em algumas versões —, é o
+   * BLOCO da pergunta que entra no cartão: a pergunta aparece, e ao aplicar a
+   * resposta o `aplicarRespostaNosCampos` desce até o controle de dentro do bloco.
+   * Assim NENHUMA pergunta da etapa fica de fora.
+   */
+  function camposPorPergunta(modal, jaVistos) {
+    const saida = [];
+
+    let rotulos = [];
+    try {
+      rotulos = queryAllProfundo(
+        '.fb-dash-form-element__label, .artdeco-text-input--label, .jobs-easy-apply-form-element__label, fieldset legend',
+        modal
+      );
+    } catch (error) {
+      return saida;
+    }
+
+    for (const rotulo of rotulos) {
+      if (!isVisible(rotulo)) continue;
+
+      const texto = clean(rotulo.textContent).slice(0, 300);
+      if (!texto) continue;
+
+      const bloco =
+        (rotulo.closest &&
+          rotulo.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset')) ||
+        rotulo.parentElement;
+      if (!bloco) continue;
+
+      // Este bloco já rendeu um campo? Então não duplica.
+      let jaTem = false;
+      for (const el of jaVistos) {
+        if (el === bloco || (bloco.contains && bloco.contains(el))) {
+          jaTem = true;
+          break;
+        }
+      }
+      if (jaTem) continue;
+      if (saida.some((c) => c.rotulo === texto)) continue;
+
+      /* O controle de dentro é quem recebe a resposta — e é dele que sai o TIPO e
+       * as OPÇÕES. Aqui estava o furo: esta rede fixava `tipo`/`opcoes`, então o
+       * `<select>` do LinkedIn chegava ao cartão com `opcoes: []` — e o cartão,
+       * sem opção, cai no campo de texto (era o "veio como input text").
+       *
+       * Preferimos o controle que está SEM resposta (`jaRespondido`), porque um
+       * bloco pode conter mais de um. */
+      const candidatos = queryAllProfundo(
+        'select, input:not([type="hidden"]), textarea, [role="combobox"], ' +
+          '[aria-haspopup], [aria-expanded], input[readonly]',
+        bloco
+      ).filter((el) => !jaRespondido(el));
+
+      const controle = candidatos[0] || bloco;
+      const descricao = descreverCampo(controle, modal);
+
+      saida.push({
+        rotulo: descricao.rotulo || texto,
+        tipo: descricao.tipo,
+        opcoes: descricao.opcoes,
+        _campo: controle,
+      });
+    }
+
+    return saida;
+  }
+
+  /**
+   * Abre o dropdown, lê as opções e fecha — o LinkedIn só monta a lista quando
+   * ele abre, então sem isso uma pergunta de lista chega ao cartão sem escolha
+   * nenhuma. Devolve os textos das opções (vazio se não deu para ler).
+   */
+  async function lerOpcoesAbrindo(modal, campo) {
+    if (!campo || !document.contains(campo)) return [];
+
+    const lerDaTela = () =>
+      Array.from(document.querySelectorAll('[role="listbox"] [role="option"]'))
+        .map((el) => clean(el.textContent || ''))
+        .filter(Boolean);
+
+    // Algumas versões já deixam a lista no DOM (escondida): aí não precisa abrir.
+    const jaTem = lerDaTela();
+    if (jaTem.length) return jaTem;
+
+    try {
+      humanClick(campo);
+
+      const itens = await waitUntil(
+        () => {
+          const lista = lerDaTela();
+          return lista.length ? lista : null;
+        },
+        CONFIG.applyStepWaitMs,
+        CONFIG.popupPollMs
+      );
+
+      /* Fecha a lista aberta. NADA de Escape: no LinkedIn ele fecha o MODAL
+       * inteiro (e ainda pergunta se descarta a candidatura — foi assim que a
+       * segunda janelinha vinha em branco). O que fecha só a lista é um clique
+       * "fora dela", e o lugar seguro é o topo do próprio modal. */
+      try {
+        const neutro =
+          (modal && modal.querySelector('h1, h2, h3, legend, header')) || modal || null;
+        if (neutro && document.contains(neutro) && neutro !== campo) humanClick(neutro);
+      } catch (erro) {
+        /* sem um lugar neutro: a lista se fecha no próximo clique do fluxo */
+      }
+      await humanPause(CONFIG.applyStepDelayMs);
+
+      return itens || [];
+    } catch (erro) {
+      return [];
+    }
+  }
+
+  /**
+   * Como `camposTravados`, mas COMPLETA as opções dos dropdowns: para cada
+   * pergunta de lista que chegou sem opção, abre o controle, lê as escolhas
+   * originais e fecha. É o que faz a pergunta de "Selecionar opção" chegar ao
+   * cartão com as opções do LinkedIn (antes ela vinha como um campo de texto).
+   */
+  async function camposTravadosCompletos(modal) {
+    const campos = camposTravados(modal);
+
+    for (const campo of campos) {
+      if (!campo || campo.tipo !== 'select' || (campo.opcoes && campo.opcoes.length)) continue;
+
+      const el = campo._campo;
+      const tagEl = String((el && el.tagName) || '').toLowerCase();
+      // Select nativo já leu as opções; o `<input readonly>` (dropdown) abre.
+      if (!ehPerguntaDeLista(el) && !(tagEl === 'input' && el.readOnly)) continue;
+
+      const opcoes = await lerOpcoesAbrindo(modal, el);
+      if (opcoes.length) campo.opcoes = opcoes;
+    }
+
+    return campos;
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* (TEMPORÁRIO) O cartão DENTRO DA ABA — o plano B da janelinha              */
+  /* ------------------------------------------------------------------------ */
+  //
+  // A janela no desktop (ajuda.html) é o caminho normal. Este cartão é o plano B:
+  // se o worker não abrir a janela (serviço indisponível, janela bloqueada pelo
+  // sistema…), em vez de DESCARTAR a vaga em silêncio, o pedido aparece aqui,
+  // dentro da página, com os mesmos campos (tipo e opções originais) e as mesmas
+  // três saídas. Era este fallback que faltava: os comentários prometiam ("se a
+  // janela não abrir, o content cai no cartão dentro da aba"), mas ele não
+  // existia — sem janela, a vaga era fechada e a varredura seguia. Sai junto com
+  // o pedido de ajuda.
+
+  /** Aplica estilo inline (usado só no posicionamento do host do cartão). */
+  function estilo(el, regras) {
+    Object.keys(regras).forEach((chave) => {
+      el.style[chave] = regras[chave];
+    });
+    return el;
+  }
+
+  /**
+   * O CSS do cartão. Vive DENTRO do Shadow DOM de propósito: o LinkedIn não
+   * alcança estas regras (nem com `!important`) e o cartão não herda o
+   * `color-scheme` da página. Era assim que o texto saía branco no fundo branco
+   * (modo escuro do LinkedIn) e os rótulos vinham cortados por regras da página.
+   */
+  const CARTAO_CSS = `
+    :host { all: initial; color-scheme: light; }
+    .caixa {
+      display: flex; flex-direction: column; width: 100%; max-height: 80vh;
+      background: #ffffff; color: #1f2933; border: 1px solid #cbd5e1;
+      border-radius: 12px; overflow: hidden;
+      box-shadow: 0 10px 34px rgba(15, 23, 42, .32);
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .cabeca {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 10px 12px; background: linear-gradient(135deg, #0a66c2 0%, #004182 100%);
+    }
+    .cabeca strong { font-size: 14px; font-weight: 700; color: #ffffff; }
+    .fechar {
+      background: transparent; border: 0; color: #ffffff; font-size: 18px;
+      line-height: 1; cursor: pointer; padding: 0 2px;
+    }
+    /* min-height 0 é o que deixa o corpo ROLAR quando o rótulo é longo: sem
+       ele o flex não encolhe abaixo do conteúdo e o cartão estoura a tela. */
+    .corpo { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px; }
+    .vaga {
+      margin: 0 0 8px; font-size: 12px; color: #334155;
+      background: #eaf2fb; border-radius: 8px; padding: 6px 8px;
+    }
+    .msg { margin: 0 0 10px; font-size: 12.5px; color: #1f2933; }
+    .campo { margin: 0 0 12px; }
+    .campo label {
+      display: block; margin-bottom: 4px; font-size: 12px; font-weight: 700;
+      color: #1f2933; white-space: normal; overflow: visible; word-break: break-word;
+    }
+    .campo input, .campo select {
+      display: block; width: 100%; padding: 7px 9px; border: 1px solid #94a3b8;
+      border-radius: 8px; font-size: 13px; font-family: inherit;
+      background: #ffffff; color: #1f2933;
+    }
+    .campo input:focus, .campo select:focus {
+      outline: 2px solid #0a66c2; outline-offset: 1px; border-color: #0a66c2;
+    }
+    .acoes { display: flex; gap: 8px; padding: 0 12px 12px; }
+    .acoes button {
+      flex: 1; padding: 9px; border: 0; border-radius: 8px; font-size: 13px;
+      font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .aplicar { background: #0a66c2; color: #ffffff; }
+    .aplicar:hover { background: #004182; }
+    .manual { background: #ffffff; color: #1f2933; border: 1px solid #94a3b8; }
+    .manual:hover { background: #eaf2fb; }
+    .pular { background: #ffffff; color: #b91c1c; border: 1px solid #94a3b8; }
+    .pular:hover { background: #fef2f2; }
+  `;
+
+  /** Cria um elemento com classe e texto (o cartão monta por aqui). */
+  function no(tag, classe, texto) {
+    const el = document.createElement(tag);
+    if (classe) el.className = classe;
+    if (texto != null) el.textContent = texto;
+    return el;
+  }
+
+  /**
+   * Desenha o cartão de resposta DENTRO da aba e espera a sua decisão. Devolve
+   * `{ acao, resposta }` — o mesmo contrato do `pedirAjuda`.
+   */
+  function cartaoNaAba(dados) {
+    const info = dados || {};
+    const listaCampos = Array.isArray(info.campos) ? info.campos : [];
+    const soManual = info.motivo === 'demora'; // não há campo para preencher
+
+    return new Promise((resolve) => {
+      let resolvido = false;
+      let timer = null;
+      const controles = [];
+
+      // O HOST é o único ponto do cartão na página: fixo no canto inferior direito,
+      // acima de tudo. O conteúdo vive no Shadow DOM (ver `CARTAO_CSS`), fora do
+      // alcance do CSS do LinkedIn.
+      const host = estilo(document.createElement('div'), {
+        position: 'fixed',
+        right: '16px',
+        bottom: '16px',
+        zIndex: '2147483647',
+        display: 'block', // `:host { all: initial }` põe `inline`; aqui fica block
+        width: '360px',
+        maxHeight: '80vh',
+        margin: '0',
+        padding: '0',
+      });
+
+      const raiz =
+        typeof host.attachShadow === 'function' ? host.attachShadow({ mode: 'open' }) : host;
+
+      const folha = document.createElement('style');
+      folha.textContent = CARTAO_CSS;
+      raiz.appendChild(folha);
+
+      const caixa = no('div', 'caixa');
+
+      const cabeca = no('div', 'cabeca');
+      cabeca.appendChild(no('strong', '', 'PegaVaga precisa de você'));
+
+      const fechar = no('button', 'fechar', '×');
+      fechar.type = 'button';
+      fechar.title = 'Fechar (a vaga segue o caminho de sempre)';
+      cabeca.appendChild(fechar);
+
+      caixa.appendChild(cabeca);
+
+      const corpo = no('div', 'corpo');
+
+      const vaga = [info.titulo, info.empresa].filter(Boolean).join(' — ');
+      if (vaga) corpo.appendChild(no('p', 'vaga', vaga));
+
+      corpo.appendChild(
+        no(
+          'p',
+          'msg',
+          soManual
+            ? 'O LinkedIn não confirmou o envio no tempo esperado. Você pode assumir a vaga à mão ou pular.'
+            : listaCampos.length
+            ? 'Responda os campos abaixo (com as opções originais do LinkedIn) e a extensão preenche e segue sozinha.'
+            : 'Não consegui ler o campo travado. Assuma a vaga à mão ou pule.'
+        )
+      );
+
+      caixa.appendChild(corpo);
+
+      // Um controle por campo, com o tipo certo: <select> com as opções que o
+      // LinkedIn oferece, ou <input> para texto.
+      listaCampos.forEach((campo, indice) => {
+        const bloco = no('div', 'campo');
+        bloco.appendChild(
+          no('label', '', (campo && campo.rotulo) || 'Pergunta ' + (indice + 1))
+        );
+
+        const opcoes = campo && Array.isArray(campo.opcoes) ? campo.opcoes : [];
+        let controle;
+
+        if ((campo && campo.tipo === 'texto') || !opcoes.length) {
+          controle = no('input');
+          controle.type = 'text';
+        } else {
+          controle = no('select');
+          const vazia = document.createElement('option');
+          vazia.value = '';
+          vazia.textContent = '— escolher —';
+          controle.appendChild(vazia);
+          opcoes.forEach((opcao) => {
+            const item = document.createElement('option');
+            item.value = String(opcao);
+            item.textContent = String(opcao);
+            controle.appendChild(item);
+          });
+        }
+
+        bloco.appendChild(controle);
+        corpo.appendChild(bloco);
+        controles.push({ rotulo: String((campo && campo.rotulo) || ''), el: controle });
+      });
+
+      const bAplicar = no('button', 'aplicar', 'Aplicar e continuar');
+      const bManual = no('button', 'manual', 'Vou preencher à mão');
+      const bPular = no('button', 'pular', 'Pular esta vaga');
+      bAplicar.type = 'button';
+      bManual.type = 'button';
+      bPular.type = 'button';
+      if (soManual) bAplicar.style.display = 'none';
+
+      const acoes = no('div', 'acoes');
+      acoes.appendChild(bAplicar);
+      acoes.appendChild(bManual);
+      acoes.appendChild(bPular);
+
+      caixa.appendChild(acoes);
+      raiz.appendChild(caixa);
+
+      const encerrar = () => {
+        if (timer) clearInterval(timer);
+        timer = null;
+        try {
+          host.remove(); // tira o cartão inteiro da página (host + Shadow DOM)
+        } catch (erro) {
+          /* já saiu da tela */
+        }
+      };
+
+      const decidir = (acao) => {
+        if (resolvido) return;
+        resolvido = true;
+
+        const resposta = {};
+        if (acao === 'aplicar') {
+          controles.forEach((c) => {
+            const valor = String((c.el && c.el.value) || '').trim();
+            if (valor && c.rotulo) resposta[c.rotulo] = valor; // rótulo é a chave da reaplicação
+          });
+        }
+
+        encerrar();
+        resolve({ acao: acao, resposta: acao === 'aplicar' ? resposta : null });
+      };
+
+      bAplicar.addEventListener('click', () => decidir('aplicar'));
+      bManual.addEventListener('click', () => decidir('manual'));
+      bPular.addEventListener('click', () => decidir('pular'));
+      fechar.addEventListener('click', () => decidir(''));
+
+      // Enter num campo de texto aplica e segue (o mesmo atalho da janelinha).
+      controles.forEach((c) => {
+        if (!c.el || c.el.tagName === 'SELECT') return;
+        c.el.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            decidir('aplicar');
+          }
+        });
+      });
+
+      (document.body || document.documentElement).appendChild(host);
+      if (controles.length && controles[0].el) controles[0].el.focus();
+
+      // O prazo e o "Parar Varredura" encerram a espera (como na janelinha).
+      const inicio = Date.now();
+      timer = setInterval(() => {
+        if (state.abort || Date.now() - inicio >= CONFIG.ajudaEsperaMs) decidir('');
+      }, CONFIG.ajudaPollMs);
+    });
+  }
+
+
+  /**
+   * Pede a você o que a extensão não sabe responder, abrindo o cartão de
+   * resposta como JANELA NO DESKTOP (ajuda.html — sem abas nem barra de
+   * endereço, no canto inferior direito). A sua decisão volta por
+   * AJUDA_RESPOSTA (o worker encaminha da janelinha para esta aba).
+   *
+   * Se a janela NÃO abrir (worker/serviço indisponível), o pedido desce para o
+   * `cartaoNaAba`: o mesmo conteúdo, dentro da página, com as mesmas saídas —
+   * assim a vaga nunca é descartada em silêncio por falta de cartão.
+   *
+   * Devolve `{ acao, resposta }`:
+   *   - `acao: 'manual'`   → você vai preencher à mão (a automação para e respeita);
+   *   - `acao: 'aplicar'`  → você respondeu os campos: `resposta` traz
+   *                          `{ rótulo do campo: valor }` e a extensão escreve e segue;
+   *   - `acao: 'pular'`    → a vaga é descartada e a varredura segue adiante;
+   *   - `acao: ''`         → ninguém respondeu a tempo (prazo/aborto) — quem
+   *                          chamou decide.
    */
   async function pedirAjuda(dados) {
-    if (state.ajuda) return ''; // já há um aviso na tela: não empilha
+    // Já há um pedido aberto (janelinha na tela): não empilha outro. Quem
+    // decide é você, não a fila — a vaga atual espera a sua decisão.
+    if (state.ajuda) return { acao: '', resposta: null };
 
-    // O aviso de campo recusado não pode ser engolido pelo intervalo cheio: cada
-    // vaga é um caso novo (o LinkedIn recusou algo que só você sabe responder).
-    // O intervalo cheio fica para o aviso de "demora", que se repetiria à toa.
-    const intervalo =
-      dados && dados.motivo === 'demora'
-        ? CONFIG.ajudaIntervaloMs
-        : CONFIG.ajudaIntervaloCamposMs;
-
-    if (Date.now() - state.ultimaAjuda < intervalo) return '';
+    /* O intervalo engolia pedidos: como cada vaga nova travava logo depois da
+     * anterior, a 2ª/3ª/… voltavam `{ acao: '' }` sem abrir janelinha nenhuma
+     * — e a vaga era descartada em silêncio como "travada" com motivo vazio.
+     * Não há mais intervalo: o `state.ajuda` acima já impede enxurrada, cada
+     * vaga é um pedido novo e quem decide é você. */
 
     const pedido = {
       id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
       acao: '',
+      resposta: null,
       avisoId: '',
+      resolver: null, // resolve quando a decisão chega da janelinha (AJUDA_RESPOSTA)
     };
-
-    const aviso = await avisarNoSistema(Object.assign({ pedidoId: pedido.id }, dados));
-
-    if (!aviso) {
-      // Sem aviso na tela não faz sentido esperar: quem chamou fecha a vaga e
-      // segue. Fica no console para dar para diagnosticar depois (permissão de
-      // notificação negada no sistema é o motivo mais comum).
-      console.warn(
-        '[PegaVaga] não consegui mostrar o aviso na área de trabalho; a vaga segue o caminho de sempre.'
-      );
-      return '';
-    }
-    pedido.avisoId = aviso.id;
-
-    state.ajuda = pedido;
-    state.ultimaAjuda = Date.now();
-
-    // O clique é humano, mas a resposta pode chegar antes de a espera começar.
-    if (state.ajudaTardia && state.ajudaTardia.id === pedido.id) {
-      pedido.acao = state.ajudaTardia.acao;
-      state.ajudaTardia = null;
-    }
+    state.ajuda = pedido; // marca que há um pedido aberto (não empilha outro)
 
     try {
-      // O "Parar Varredura" vale na hora: não ficamos presos esperando resposta.
-      await waitUntil(() => pedido.acao || state.abort, CONFIG.ajudaEsperaMs, CONFIG.ajudaPollMs);
+      // A janela no desktop é o caminho normal (o worker cuida dela).
+      let erroDeEnvio = null;
+      const aviso = await chrome.runtime
+        .sendMessage({
+          type: MSG.AJUDA_PEDIDO,
+          pedidoId: pedido.id,
+          motivo: dados && dados.motivo,
+          titulo: dados && dados.titulo,
+          empresa: dados && dados.empresa,
+          campos: dados && dados.campos, // { rotulo, tipo, opcoes } — a janelinha desenha a partir deles
+        })
+        .catch((erro) => {
+          erroDeEnvio = erro;
+          return null;
+        });
+
+      let decisao;
+
+      if (aviso && aviso.ok) {
+        pedido.avisoId = aviso.id || '';
+
+        // A janela abriu, mas o tipo `popup` foi recusado (saiu uma janela
+        // normal): registramos o motivo para poder corrigir a moldura.
+        if (aviso.recusa) {
+          console.warn(
+            '[PegaVaga] a janelinha abriu como janela NORMAL (o tipo popup foi recusado): ' +
+              aviso.recusa
+          );
+        }
+
+        decisao = await esperarRespostaDaJanela(pedido);
+      } else {
+        // A janelinha não abriu (worker/serviço indisponível, janela bloqueada…):
+        // o pedido desce para o cartão DENTRO da página. Antes, este era o ponto
+        // em que a vaga era descartada em silêncio. O aviso abaixo diz POR QUE
+        // (motivo do worker, ou o erro de envio — worker sem ouvinte, contexto
+        // invalidado…): é o que permite corrigir a causa raiz depois.
+        console.warn(
+          '[PegaVaga] nao consegui abrir a janelinha no desktop; cartao exibido na pagina.',
+          { motivo: (aviso && aviso.motivo) || null, aviso: aviso, erroDeEnvio: erroDeEnvio }
+        );
+        decisao = await cartaoNaAba(dados);
+      }
+
+      pedido.acao = (decisao && decisao.acao) || '';
+      pedido.resposta = (decisao && decisao.resposta) || null;
     } finally {
       state.ajuda = null;
-      fecharAviso(pedido.avisoId);
+      // Some com a janelinha se ela ainda estiver aberta (prazo/aborto): ela não
+      // pode ficar na tela pedindo algo que não existe mais.
+      if (pedido.avisoId) {
+        try {
+          chrome.runtime.sendMessage({ type: MSG.AJUDA_FECHAR, avisoId: pedido.avisoId });
+        } catch (erroNoFechamento) {
+          /* sem worker: a janelinha se fecha sozinha ao responder */
+        }
+      }
     }
 
-    return pedido.acao || '';
+    return { acao: pedido.acao || '', resposta: pedido.resposta };
+  }
+
+  /**
+   * Espera a decisão que vem da JANELINHA DO DESKTOP: o case AJUDA_RESPOSTA do
+   * onMessage resolve `pedido.resolver` quando o worker encaminha a sua escolha.
+   * Mesmo prazo e mesmo corte do "Parar Varredura" do cartão na aba.
+   */
+  function esperarRespostaDaJanela(pedido) {
+    return new Promise((resolve) => {
+      let resolvido = false;
+      const fim = (resultado) => {
+        if (resolvido) return;
+        resolvido = true;
+        clearInterval(checagem);
+        resolve(resultado || { acao: '', resposta: null });
+      };
+
+      pedido.resolver = fim; // é o que o case AJUDA_RESPOSTA chama
+
+      // Prazo + "Parar Varredura": o que vier primeiro encerra a espera.
+      const inicio = Date.now();
+      const checagem = setInterval(() => {
+        if (state.abort || Date.now() - inicio >= CONFIG.ajudaEsperaMs) {
+          fim({ acao: '', resposta: null });
+        }
+      }, CONFIG.ajudaPollMs);
+    });
   }
 
   /**
@@ -1938,17 +3065,456 @@
   }
 
   /**
+   * Escreve a resposta que você digitou na janelinha nos campos travados do
+   * formulário. `resposta` é `{ rótulo do campo: texto }`. Para cada rótulo,
+   * acha o campo inválido cujo rótulo bate (normalizado) e preenche. Devolve
+   * quantos campos conseguiu preencher.
+   */
+  /**
+   * Versões texto das opções de um combobox: o texto que você escolher no
+   * cartão é o que `aplicarRespostaNosCampos` procura na lista.
+   */
+  function textoOpcoesCombo(opcoes) {
+    return (opcoes || []).map((o) => String(o.texto || o.value || '')).filter(Boolean);
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Combobox do Easy Apply: ler, detectar valor e aplicar resposta            */
+  /* ------------------------------------------------------------------------ */
+  // O dropdown de hoje é uma div/botão (`role=combobox`, `aria-haspopup`) que
+  // abre uma `listbox`: sem <select>, então cada etapa precisa de código
+  // próprio — ler, saber se já respondeu e clicar na opção certa.
+
+  /**
+   * O TEXTO do controle (ou o `placeholder`, ou o valor de um input readonly) é
+   * o placeholder de uma lista — "Selecionar opção"? É o sinal que NÃO depende de
+   * ARIA nenhuma: o artdeco já renderizou o dropdown como `<select>`, como botão
+   * e como `<input readonly placeholder="Selecionar opção">`. Sem isto, um
+   * dropdown sem ARIA era lido como campo de texto (ou descartado pelo
+   * `readOnly`) e sumia do pedido.
+   */
+  function textoEhPlaceholderDeLista(campo) {
+    if (!campo) return false;
+
+    const tag = String(campo.tagName || '').toLowerCase();
+    const textos = [
+      campo.textContent,
+      campo.getAttribute && campo.getAttribute('placeholder'),
+      tag === 'input' ? campo.value : '',
+    ];
+
+    return textos.some((t) => {
+      const texto = clean(t || '');
+      return Boolean(texto) && texto.length <= 40 && PLACEHOLDER_TEXTO_RE.test(texto);
+    });
+  }
+
+  /** É uma pergunta de lista? (sinal de ARIA OU o placeholder no texto) */
+  function ehPerguntaDeLista(campo) {
+    return ehCombo(campo) || textoEhPlaceholderDeLista(campo);
+  }
+
+  /**
+   * É um controle de dropdown/combobox custom (a pergunta de "Selecionar opção")?
+   *
+   * O gatilho do Easy Apply NEM SEMPRE é um `<button>`: há versões que usam
+   * `<div role="button" aria-haspopup="listbox">`. Antes só `<button>` entrava — e
+   * era por isso que a pergunta de lista não aparecia como select no cartão (ela
+   * caía no ramo de texto e virava um input sem opção).
+   */
+  function ehCombo(el) {
+    if (!el) return false;
+
+    const tag = String(el.tagName || '').toLowerCase();
+    const role = el.getAttribute('role');
+    const haspopup = el.getAttribute('aria-haspopup');
+
+    // Nativos que NÃO são dropdown: fora.
+    if (tag === 'select' || tag === 'textarea') return false;
+
+    /* `<input role="combobox">` ENTRA: o dropdown do artdeco é um input
+     * `readonly` que só abre com clique (o `readOnly` é o que impede de digitar,
+     * não de escolher). Era por ele ser descartado como "readonly" que a pergunta
+     * de lista não chegava ao cartão. */
+    if (tag === 'input' && role !== 'combobox' && haspopup !== 'listbox') return false;
+
+    if (role === 'combobox') return true;
+    if (role === 'listbox') return true;
+    if (haspopup === 'listbox') return true;
+
+    // `aria-expanded` sozinho é usado em muita coisa (accordion, "ver mais"):
+    // só vale dentro de um bloco de pergunta do Easy Apply.
+    if (el.hasAttribute('aria-expanded')) {
+      return Boolean(
+        el.closest && el.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset')
+      );
+    }
+
+    return false;
+  }
+
+  /**
+   * Caça a lista de opções de um combobox, onde ela estiver:
+   *   1. a `listbox` aberta na tela;
+   *   2. a lista escondida irmã/prima do botão (pronta para abrir);
+   *   3. os itens `option`/`listitem` soltos dentro do fieldset do campo.
+   * Devolve `[{ texto, value, el }]`.
+   */
+  function opcoesDoCombo(modal, campo) {
+    const saida = [];
+    const vistos = new Set();
+
+    const anotar = (el) => {
+      const texto = clean(el.textContent || '');
+      if (!texto || texto.length > 80 || vistos.has(texto)) return;
+      vistos.add(texto);
+      saida.push({
+        texto: texto,
+        value: String(el.getAttribute('data-value') || el.getAttribute('value') || texto),
+        el: el,
+      });
+    };
+
+    try {
+      const raiz = modal && document.contains(modal) ? modal : document;
+
+      // 1) Lista aberta agora: itens visíveis da listbox.
+      raiz
+        .querySelectorAll('[role="listbox"] [role="option"]:not([aria-disabled="true"])')
+        .forEach(anotar);
+      if (saida.length) return saida;
+
+      // 2) Lista ainda fechada: escondida ao lado do botão (irmãos do container).
+      //    Só containers de UMA pergunta: com `fieldset`/`div` genéricos aqui, a
+      //    "âncora" virava a etapa inteira e as opções de outro campo entravam.
+      const ancora =
+        (campo.closest &&
+          campo.closest(
+            '.fb-dash-form-element, .jobs-easy-apply-form-element, .artdeco-text-input--container'
+          )) ||
+        campo.parentElement;
+
+      if (ancora) {
+        ancora
+          .querySelectorAll(
+            '[role="option"], [role="listitem"], li[data-value], div[data-value], li[data-test-list-item]'
+          )
+          .forEach(anotar);
+        if (saida.length) return saida;
+
+        // 2b) Container pai acima: alguns dropdowns penduram a lista um nível fora.
+        const avo = ancora.parentElement;
+        if (avo) {
+          avo
+            .querySelectorAll('[role="option"], li[data-value], div[data-value]')
+            .forEach(anotar);
+          if (saida.length) return saida;
+        }
+      }
+
+      // 3) Último recurso: qualquer item de lista do modal com texto curto.
+      raiz.querySelectorAll('[role="option"]').forEach(anotar);
+    } catch (error) {
+      /* DOM mudou no meio da leitura: vale o que deu para anotar */
+    }
+
+    return saida;
+  }
+
+  /** Texto/valor de PLACEHOLDER de um controle vazio ("Selecione…", "Choose…"). */
+  const PLACEHOLDER_RE = /^(selecione|selecionar|escolha|escolher|select|choose|--|—|-)\b/i;
+
+  /**
+   * O texto é EXATAMENTE um placeholder de lista ("Selecionar opção", "Selecione
+   * uma opção", "Select an option", "—")? É o que identifica o dropdown SEM
+   * resposta mesmo quando não sobra nenhum sinal de ARIA — e sem confundir com
+   * uma pergunta que comece com "Selecione o seu nível…".
+   */
+  const PLACEHOLDER_TEXTO_RE =
+    /^((selecione|selecionar|escolha|escolher|select|choose)( uma op[çc][ãa]o| op[çc][ãa]o| um valor| an option| option| a value|\.\.\.|…)?|—+|--+|-+|\.{2,}|…)$/i;
+
+  /**
+   * A pergunta é de SIM/NÃO? Nesses dropdowns o LinkedIn oferece exatamente
+   * "Sim"/"Não" — e é o que o cartão mostra quando a lista de opções não está no
+   * DOM (o dropdown custom só revela as opções depois de abrir).
+   */
+  const PERGUNTA_SIM_NAO_RE =
+    /(voc[êe]|aceita|concorda|de acordo|autoriza|dispon[íi]vel|sim ou n[ãa]o|\byes or no\b)/i;
+
+  /**
+   * O `<select>` está SEM resposta? O placeholder do LinkedIn nem sempre tem
+   * `value=""` — às vezes é "Selecione uma opção" com valor "0". Então olhamos a
+   * OPÇÃO escolhida: valor vazio, opção desabilitada ou texto de placeholder
+   * contam como vazio (é o que trava a etapa e precisa aparecer no cartão).
+   */
+  function selectVazio(select) {
+    try {
+      const opcao = select && select.options ? select.options[select.selectedIndex] : null;
+      if (!opcao) return true;
+
+      const value = String(opcao.value == null ? '' : opcao.value).trim();
+      if (value === '') return true;
+      if (opcao.disabled) return true;
+
+      const texto = clean(opcao.textContent || '');
+      return PLACEHOLDER_RE.test(texto) || PLACEHOLDER_RE.test(value);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * O combobox já tem resposta (não é placeholder)? Detecta pelos mesmos
+   * sinais que uma pessoa veria: `aria-valuetext`, texto diferente do
+   * "Selecione…", ou valor em data-attribute — e ignora o placeholder.
+   */
+  function comboTemValor(campo) {
+    if (!campo) return false;
+
+    try {
+      const rotulo = fieldLabel(campo);
+      const textos = [
+        campo.getAttribute('aria-valuetext'),
+        campo.getAttribute('data-value'),
+        campo.textContent,
+      ]
+        .map((t) => clean(t || ''))
+        .filter(Boolean);
+
+      for (const texto of textos) {
+        // Placeholder conta como vazio — inclusive "Choose…"/"Escolha…", que
+        // antes passavam por "escolha de verdade" (texto curto) e escondiam o
+        // campo do cartão de ajuda.
+        if (PLACEHOLDER_RE.test(texto)) continue;
+        if (normalizar(texto).indexOf('selecione') === 0) continue;
+        if (rotulo && normalizar(texto) === normalizar(rotulo)) continue; // ecoa a pergunta
+        if (texto.length <= 60) return true; // tem uma escolha de verdade
+      }
+    } catch (error) {
+      /* campo quebrado: trata como vazio (mostra no cartão) */
+    }
+
+    return false;
+  }
+
+  /**
+   * Aplica a sua escolha num combobox: abre a lista (sem abrir não há opção
+   * para clicar), espera os itens entrarem na tela, clica no que casa com o
+   * texto (exato, depois "contém") e avisa o React. Devolve `true` se marcou.
+   */
+  async function aplicarEmCombo(modal, campo, valor, alvoOpcao) {
+    try {
+      if (!modal || !document.contains(modal) || !document.contains(campo)) return false;
+
+      const alvo = alvoOpcao || normalizar(valor);
+      if (!alvo) return false;
+
+      // Já respondeu (ou o humano respondeu no meio tempo)? Não mexe.
+      if (comboTemValor(campo)) return true;
+
+      // Abre a lista com um clique humano (e revalida: o DOM do modal muda).
+      humanClick(campo);
+      await waitUntil(
+        () => opcoesDoCombo(modal, campo).length > 0,
+        Math.min(CONFIG.popupWaitMs, 3000)
+      );
+
+      if (!document.contains(campo)) return false;
+
+      const opcoes = opcoesDoCombo(modal, campo);
+      const escolhida =
+        opcoes.find((o) => normalizar(o.texto) === alvo) ||
+        opcoes.find((o) => normalizar(o.texto).indexOf(alvo) >= 0) ||
+        opcoes.find((o) => normalizar(o.value) === alvo);
+
+      if (!escolhida || !escolhida.el || !document.contains(escolhida.el)) return false;
+
+      humanClick(escolhida.el);
+      await humanPause(CONFIG.applyStepDelayMs);
+
+      // Conta como aplicado se a lista fechou ou o valor apareceu no combobox.
+      return (
+        opcoesDoCombo(modal, campo).length === 0 ||
+        comboTemValor(campo) ||
+        normalizar(campo.textContent || '').indexOf(normalizar(escolhida.texto)) >= 0
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function aplicarRespostaNosCampos(modal, resposta) {
+    if (!modal || !resposta || typeof resposta !== 'object') return 0;
+
+    let aplicados = 0;
+
+    const buscarCampo = (alvoPergunta) => {
+      // Re-busca o formulário AGORA (o modal pode ter sido reconstruído desde
+      // que o cartão abriu): o rótulo manda, e vale campo nativo ou combobox.
+      for (const el of queryAllUnique(APPLY_SEL.invalid, modal)) {
+        if (!isVisible(el)) continue;
+        const real = resolverCampo(el);
+        if (!real || !isVisible(real)) continue;
+        if (normalizar(fieldLabel(real) || real.textContent).indexOf(alvoPergunta) >= 0) {
+          return real;
+        }
+      }
+
+      for (const el of queryAllUnique(
+        'input, select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
+        modal
+      )) {
+        if (!isVisible(el)) continue;
+        if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
+      }
+
+      // 3) O BLOCO da pergunta: quando o controle não é um campo reconhecível, o
+      //    alvo é o bloco — e o chamador desce até o controle que estiver dentro
+      //    dele (ver `aplicarRespostaNosCampos`).
+      for (const bloco of queryAllUnique(
+        '.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset',
+        modal
+      )) {
+        if (!isVisible(bloco)) continue;
+        if (normalizar(fieldLabel(bloco) || bloco.textContent).indexOf(alvoPergunta) >= 0) {
+          return bloco;
+        }
+      }
+
+      // 4) No DOCUMENTO, restrito ao formulário de candidatura: o conteúdo do
+      //    Easy Apply pode estar num portal do React, fora do nó do `modal`.
+      for (const el of queryAllProfundo(
+        'input, select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]'
+      )) {
+        if (!pertenceAoFormulario(el, modal) || !isVisible(el)) continue;
+        if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
+      }
+
+      return null;
+    };
+
+    for (const [rotulo, texto] of Object.entries(resposta)) {
+      const valor = String(texto == null ? '' : texto);
+      if (!valor) continue; // campo que você deixou em branco: não mexe
+
+      const alvoPergunta = normalizar(rotulo);
+      const alvoOpcao = normalizar(valor);
+
+      // Acha o campo de verdade cujo rótulo (a pergunta) bate com o que a janelinha
+      // mostrou — mesma origem (`fieldLabel`), para não escrever no campo errado.
+      // A busca é feita na hora (o modal pode ter sido reconstruído desde que
+      // o cartão abriu): inválidos primeiro, depois o formulário inteiro.
+      let campo = buscarCampo(alvoPergunta);
+
+      if (!campo) continue;
+
+      /* O alvo pode ser o BLOCO da pergunta (quando o controle não é um campo
+       * reconhecível — ver `camposPorPergunta`): desce até o controle de verdade
+       * que estiver dentro dele antes de escrever. */
+      const tagAlvo = String(campo.tagName || '').toLowerCase();
+      if (
+        tagAlvo !== 'input' &&
+        tagAlvo !== 'select' &&
+        tagAlvo !== 'textarea' &&
+        !ehCombo(campo)
+      ) {
+        const dentro = campo.querySelector(
+          '[role="combobox"], [aria-haspopup], [aria-expanded], input[readonly], ' +
+            'input:not([type="hidden"]), select, textarea'
+        );
+        if (dentro) campo = dentro;
+      }
+
+      const tag = String(campo.tagName || '').toLowerCase();
+      const type = String(campo.type || '').toLowerCase();
+
+      try {
+        if (tag === 'select') {
+          // Escolhe a opção cujo texto/valor casa com o que VOCÊ escolheu (não com a
+          // pergunta). Casa exato primeiro, depois "contém", para não errar de opção.
+          const opcoes = Array.from(campo.options);
+          const opcao =
+            opcoes.find((o) => normalizar(o.textContent) === alvoOpcao) ||
+            opcoes.find((o) => normalizar(o.textContent).indexOf(alvoOpcao) >= 0) ||
+            opcoes.find((o) => normalizar(o.value) === alvoOpcao);
+          if (opcao) {
+            setNativeValue(campo, opcao.value);
+            campo.dispatchEvent(new Event('input', { bubbles: true }));
+            campo.dispatchEvent(new Event('change', { bubbles: true }));
+            aplicados += 1;
+          }
+        } else if (ehCombo(campo) || (tag === 'input' && campo.readOnly)) {
+          // Dropdown custom (ou `<input readonly>` de escolha — o do artdeco):
+          // abre, acha a opção pelo texto e clica. Sem abrir não há lista no DOM
+          // para clicar, e escrever o valor num readonly não adianta (o LinkedIn
+          // ignora). O `fireFieldEvents` conta a escolha como preenchimento.
+          const aplicado = await aplicarEmCombo(modal, campo, valor, alvoOpcao);
+          if (aplicado) aplicados += 1;
+        } else if (type === 'radio') {
+          // Grupo de rádios: marca o que tem o rótulo da opção escolhida.
+          const grupo = radioGroup(modal, campo);
+          const alvo =
+            grupo.find((f) => normalizar(fieldLabel(f) || f.value) === alvoOpcao) ||
+            grupo.find((f) => normalizar(fieldLabel(f) || f.value).indexOf(alvoOpcao) >= 0);
+          if (alvo) {
+            const clicavel = (alvo.labels && alvo.labels[0]) || alvo;
+            clicavel.click();
+            aplicados += 1;
+          }
+        } else if (type === 'checkbox') {
+          // Binário ("Sim"/"Não"): "Sim" marca; "Não" deixa como está (desmarcado).
+          if (alvoOpcao === 'sim') {
+            if (!campo.checked) {
+              const clicavel = (campo.labels && campo.labels[0]) || campo;
+              clicavel.click();
+            }
+            aplicados += 1;
+          }
+        } else {
+          // Texto (input/textarea): escreve e avisa o React do LinkedIn.
+          setNativeValue(campo, valor);
+          campo.dispatchEvent(new Event('input', { bubbles: true }));
+          campo.dispatchEvent(new Event('change', { bubbles: true }));
+          aplicados += 1;
+        }
+      } catch (error) {
+        /* campo não reagiu: segue para o próximo */
+      }
+    }
+
+    return aplicados;
+  }
+
+  /**
    * Tenta resolver com você uma vaga que travou num campo ou não confirmou o
-   * envio. Devolve o desfecho a usar (`manual`/`pulada`), ou `null` quando não
-   * houve aviso — aí vale o desfecho de sempre.
+   * envio. Devolve o desfecho a usar (`manual`/`pulada`/`continuar`), ou `null`
+   * quando não houve aviso — aí vale o desfecho de sempre.
+   *
+   * `continuar` é o caso novo: você respondeu os campos na janelinha, a extensão
+   * preencheu e a candidatura tenta seguir sozinha (sem te levar para a aba).
    */
   async function resolverComAjuda(modal, dados) {
-    const acao = await pedirAjuda(dados);
-    if (!acao) return null;
+    const decisao = await pedirAjuda(dados);
+    if (!decisao || !decisao.acao) return null;
 
-    if (acao === 'manual') {
+    if (decisao.acao === 'manual') {
       await esperarPreenchimentoManual(modal);
       return { status: 'manual' };
+    }
+
+    if (decisao.acao === 'aplicar') {
+      // Você respondeu na janelinha: preenche os campos travados e deixa o fluxo
+      // seguir. Devolve `continuar` para quem chamou tentar o próximo passo.
+      const aplicados = await aplicarRespostaNosCampos(modal, decisao.resposta);
+
+      /* Nada foi escrito e o formulário já saiu da tela: não há o que continuar
+       * (e pedir de novo abriria uma janelinha EM BRANCO, porque os campos não
+       * existem mais). Devolve o desfecho honesto e a varredura segue. */
+      if (!aplicados && (!modal || !document.contains(modal))) {
+        return { status: 'incompleta' };
+      }
+
+      return { status: 'continuar' };
     }
 
     // Você mandou pular: a vaga é descartada e não volta (sem gastar cota).
@@ -2271,7 +3837,25 @@
     state.abrirFormulario = false;
 
     try {
-      return await runApplyFlow(jobId);
+      // `continuar` = você respondeu os campos na janelinha e a extensão seguiu
+      // sozinha. Se, ao reavaliar, ainda falta algo, o fluxo já devolve o
+      // desfecho honesto (enviada/incompleta/…); o limite de reentradas evita
+      // um laço infinito caso o LinkedIn continue recusando.
+      let resultado = await runApplyFlow(jobId);
+      let reentradas = 0;
+
+      while (resultado && resultado.status === 'continuar' && reentradas < 2 && !state.abort) {
+        reentradas += 1;
+        resultado = await runApplyFlow(jobId);
+      }
+
+      // Ainda "continuar" depois das reentradas: não conseguimos enviar sozinho.
+      // Registramos como travada (sem gastar cota) com o que faltou.
+      if (resultado && resultado.status === 'continuar') {
+        return { status: 'travada', missing: resultado.missing, filled: resultado.filled, steps: resultado.steps };
+      }
+
+      return resultado;
     } finally {
       // O ponteiro morre com a vaga (o formulário pode ter sido descartado ou
       // trocado pelo LinkedIn), mas o guard **não sai de serviço**: se a
@@ -2434,8 +4018,22 @@
           // descartar, perguntamos se você quer assumir esta vaga à mão.
           const ajuda = await resolverComAjuda(
             modal,
-            ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+            ajudaContexto(
+              jobId,
+              'campos',
+              missing.slice(0, 3).join(', '),
+              await camposTravadosCompletos(modal)
+            )
           );
+
+          // Você respondeu na janelinha: os campos já foram preenchidos, então
+          // voltamos ao topo do laço para reavaliar a etapa (agora deve haver
+          // botão) em vez de encerrar a candidatura aqui.
+          if (ajuda && ajuda.status === 'continuar') {
+            tentativas = 0;
+            stalled = 0;
+            continue;
+          }
 
           if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
 
@@ -2444,31 +4042,42 @@
         }
       }
 
-      // O LinkedIn já recusou um campo desta etapa (o "Avançar" anterior não
-      // saiu do lugar)? Tentamos responder o que ainda dá e, se ele continuar
-      // recusando, pedimos ajuda na área de trabalho em vez de martelar o botão
-      // até estourar o limite de etapas — era assim que a vaga era descartada
-      // sozinha, sem aviso nenhum.
+      // O "Avançar" anterior não saiu do lugar? Então esta etapa tem um campo que
+      // ainda está sem resposta. Tentamos responder o que dá e, se sobrar campo
+      // em branco, pedimos ajuda na área de trabalho — em vez de martelar o botão
+      // até estourar o limite de etapas (era assim que a vaga era descartada
+      // sozinha, sem aviso e sem chance de preencher).
+      //
+      // Quem diz o que falta é o `camposTravados`: ele olha primeiro o que o
+      // LinkedIn marcou como recusado e, se nada veio marcado (as classes mudam),
+      // varre o formulário procurando o que um humano veria em branco — um campo
+      // sem valor, um select sem escolha, um rádio sem marcação. Antes daqui só
+      // o `invalidFields` valia: quando o LinkedIn não marcava o campo, o aviso
+      // nunca aparecia e a vaga era pulada em silêncio.
       if (tentativas > 0) {
-        const recusados = invalidFields(modal);
+        filled = filled.concat(await fillPendingFields(modal, cfg));
 
-        if (recusados.length) {
-          filled = filled.concat(await fillPendingFields(modal, cfg));
+        const pendentes = await camposTravadosCompletos(modal);
 
-          const rejeitados = invalidFields(modal);
+        if (pendentes.length) {
+          const missing = describeBlocker(modal).concat(invalidFields(modal));
+          const ajuda = await resolverComAjuda(
+            modal,
+            ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '), pendentes)
+          );
 
-          if (rejeitados.length) {
-            const missing = describeBlocker(modal).concat(rejeitados);
-            const ajuda = await resolverComAjuda(
-              modal,
-              ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
-            );
-
-            if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
-
-            await closeModal(modal, true);
-            return { status: 'travada', missing, filled, steps };
+          // Você respondeu na janelinha: campos preenchidos, então voltamos ao
+          // topo do laço para reavaliar a etapa (e seguir para o "Avançar").
+          if (ajuda && ajuda.status === 'continuar') {
+            tentativas = 0;
+            stalled = 0;
+            continue;
           }
+
+          if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
+
+          await closeModal(modal, true);
+          return { status: 'travada', missing, filled, steps };
         }
       }
 
@@ -2499,8 +4108,21 @@
         const missing = describeBlocker(modal).concat(invalidos);
         const ajuda = await resolverComAjuda(
           modal,
-          ajudaContexto(jobId, invalidos.length ? 'campos' : 'demora', missing.slice(0, 3).join(', '))
+          ajudaContexto(
+            jobId,
+            invalidos.length ? 'campos' : 'demora',
+            missing.slice(0, 3).join(', '),
+            await camposTravadosCompletos(modal)
+          )
         );
+
+        // Você respondeu na janelinha: preenchemos e voltamos ao topo do laço —
+        // agora o botão de envio deve funcionar (ou a confirmação já chegou).
+        if (ajuda && ajuda.status === 'continuar') {
+          tentativas = 0;
+          stalled = 0;
+          continue;
+        }
 
         if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
 
@@ -2525,8 +4147,21 @@
           // esta vaga à mão.
           const ajuda = await resolverComAjuda(
             modal,
-            ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+            ajudaContexto(
+              jobId,
+              'campos',
+              missing.slice(0, 3).join(', '),
+              await camposTravadosCompletos(modal)
+            )
           );
+
+          // Você respondeu na janelinha: campos preenchidos, voltamos ao topo do
+          // laço para tentar o "Avançar" de novo.
+          if (ajuda && ajuda.status === 'continuar') {
+            tentativas = 0;
+            stalled = 0;
+            continue;
+          }
 
           if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
 
@@ -2538,17 +4173,25 @@
       }
     }
 
-    // Estourou o limite de etapas/tempo com um campo recusado na tela: antes de
-    // descartar, avisamos na área de trabalho — quem decide é você, não a
-    // contagem de etapas.
-    const recusadosNoFim = document.contains(modal) ? invalidFields(modal) : [];
-    const missing = describeBlocker(modal).concat(recusadosNoFim);
+    // Estourou o limite de etapas/tempo com campo ainda sem resposta na tela:
+    // antes de descartar, avisamos na área de trabalho — quem decide é você, não
+    // a contagem de etapas. O `camposTravados` pega tanto o campo que o LinkedIn
+    // recusou quanto o que ficou em branco sem ele marcar.
+    const pendentesNoFim = document.contains(modal) ? await camposTravadosCompletos(modal) : [];
+    const missing = describeBlocker(modal).concat(invalidFields(modal));
 
-    if (recusadosNoFim.length) {
+    if (pendentesNoFim.length) {
       const ajuda = await resolverComAjuda(
         modal,
-        ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '))
+        ajudaContexto(jobId, 'campos', missing.slice(0, 3).join(', '), pendentesNoFim)
       );
+
+      // Você respondeu na janelinha: os campos foram preenchidos. Devolvemos
+      // `continuar` e a varredura revisita a vaga para tentar enviar (não
+      // gastamos cota com um retrato de "travada" que já dá para resolver).
+      if (ajuda && ajuda.status === 'continuar') {
+        return { status: 'continuar', missing, filled, steps };
+      }
 
       if (ajuda) return Object.assign({ missing, filled, steps }, ajuda);
     }
@@ -2641,8 +4284,25 @@
   /** Guarda o resultado na vaga e, se enviou, lança na cota. */
   async function recordApplyResult(id, result) {
     const current = state.jobs[id] || {};
-    const attempts = Math.min(CONFIG.applyMaxAttempts, (current.applyAttempts || 0) + 1);
     const now = new Date().toISOString();
+
+    /* Só status que DECIDEM a vaga gastam tentativa: finais (enviada, manual,
+     * pulada, externa) e os que pedem você (travada, incompleta — precisam da
+     * janelinha). Status transitórios de página/lista (sem_botao, sem_modal,
+     * sem clique porque você estava usando o navegador…) NÃO gastam: duas
+     * passadas com o formulário lento matavam a vaga para sempre, e ela nunca
+     * tinha sido nem tentada. */
+    const gastatentativa =
+      result.status === 'enviada' ||
+      result.status === 'manual' ||
+      result.status === 'pulada' ||
+      result.status === 'externa' ||
+      result.status === 'travada' ||
+      result.status === 'incompleta';
+
+    const attempts = gastatentativa
+      ? Math.min(CONFIG.applyMaxAttempts, (current.applyAttempts || 0) + 1)
+      : current.applyAttempts || 0;
 
     const patch = {
       applyStatus: result.status,
@@ -2840,12 +4500,17 @@
   }
 
   /**
-   * Podemos rodar agora? Considera a janela do agendador e o período de descanso
-   * imposto pela proteção da conta (quando o LinkedIn sinaliza limite de uso).
+   * Podemos rodar agora? Considera o período de descanso imposto pela proteção da
+   * conta (quando o LinkedIn sinaliza limite de uso) e a janela do agendador — mas
+   * a janela só vale para a fila que o próprio agendador montou: uma varredura
+   * iniciada à mão roda a qualquer hora.
    */
   function gateState() {
     const guard = guardUntil();
     if (guard) return { open: false, resumeAt: guard, reason: 'guard' };
+
+    // Filas do pop-up não têm `source`: são do usuário.
+    if (!filaAutomatica(state.run)) return { open: true, resumeAt: null, reason: 'schedule' };
 
     return windowState();
   }
@@ -3070,8 +4735,9 @@
   async function startScan() {
     if (state.scanning) return;
 
-    // Fora da janela do agendador (ou no descanso de proteção) não varremos: a
-    // fila fica parada e volta sozinha quando o horário abrir.
+    // Fora da janela do agendador (ou no descanso de proteção) a fila AUTOMÁTICA
+    // não varre: ela fica parada e volta sozinha quando o horário abrir. A
+    // varredura iniciada à mão não passa por aqui — ela roda a qualquer hora.
     const gate = gateState();
     if (!gate.open) {
       await pauseRunUntil(gate.resumeAt, gate.reason);
@@ -3219,6 +4885,25 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message && message.type) {
+      case MSG.AJUDA_RESPOSTA:
+        // A decisão veio da janelinha do desktop (encaminhada pelo worker):
+        // resolve quem está esperando em `pedirAjuda` — o resto do fluxo é o
+        // mesmo do cartão na aba (aplicar escreve e segue / à mão espera /
+        // pular descarta).
+        if (
+          state.ajuda &&
+          state.ajuda.id === String(message.pedidoId || '') &&
+          typeof state.ajuda.resolver === 'function'
+        ) {
+          state.ajuda.resolver({
+            acao: String(message.acao || ''),
+            resposta:
+              message.resposta && typeof message.resposta === 'object' ? message.resposta : null,
+          });
+        }
+        sendResponse({ ok: true });
+        break;
+
       case MSG.PING:
         sendResponse({
           ok: true,
@@ -3265,22 +4950,6 @@
         broadcastProgress();
         sendResponse({ ok: true });
         break;
-      // (TEMPORÁRIO) A sua decisão no aviso da área de trabalho chegou: guardamos
-      // no pedido que está esperando (o id evita que uma resposta velha, de outro
-      // pedido, acorde a espera errada).
-      case MSG.AJUDA_RESPOSTA: {
-        const acao = message.acao === 'pular' ? 'pular' : 'manual';
-
-        if (state.ajuda && state.ajuda.id === message.pedidoId) {
-          state.ajuda.acao = acao;
-        } else {
-          state.ajudaTardia = { id: message.pedidoId, acao: acao };
-        }
-
-        sendResponse({ ok: true });
-        break;
-      }
-
       default:
         break;
     }

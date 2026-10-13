@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>PegaVaga — precisa de você</title>
+  <!--
+    O cartão do pedido de ajuda, como página da extensão. O background o abre
+    numa JANELA POPUP do Chrome (sem barra de endereço, sem moldura) no canto
+    inferior direito do desktop — e é o ajuda.js que a posiciona, arrasta e
+    manda a sua decisão de volta. O estilo é o do próprio popup: nada do
+    stylesheet do LinkedIn para sobrescrever nada aqui.
+  -->
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: transparent; /* só o cartão aparece: a janela é "sem borda" */
+      color-scheme: light; /* o modo escuro do Chrome não pinta os campos de escuro */
+    }
+    body {
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      color: #1f2933;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #cartao {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #fff;
+      border-radius: 12px 12px 0 0;
+      box-shadow: 0 10px 34px rgba(15, 23, 42, .28);
+      overflow: hidden;
+    }
+    .cabeca {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      cursor: move; /* a janela inteira arrasta por aqui */
+      background: linear-gradient(135deg, #0a66c2 0%, #004182 100%);
+      color: #fff;
+    }
+    .cabeca strong { font-size: 14px; }
+    .fechar {
+      background: transparent;
+      border: 0;
+      color: #fff;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+    }
+    .corpo { padding: 12px; flex: 1; overflow: auto; }
+    .vaga {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: #334155;
+      background: #eaf2fb;
+      border-radius: 8px;
+      padding: 6px 8px;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .msg { margin: 0 0 10px; font-size: 12.5px; }
+    .campo { margin: 0 0 10px; }
+    .campo label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .campo input, .campo select {
+      width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      background: #fff;
+      color: #1f2933;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .acoes { display: flex; gap: 8px; padding: 0 12px 12px; }
+    .acoes button {
+      flex: 1;
+      padding: 9px;
+      border: 0;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .aplicar { background: #0a66c2; color: #fff; }
+    .manual { background: #fff; color: #1f2933; border: 1px solid #cbd5e1 !important; }
+    .pular { background: #fff; color: #c53030; border: 1px solid #cbd5e1 !important; }
+  </style>
+</head>
+<body>
+  <div id="cartao">
+    <div class="cabeca" id="cabeca">
+      <strong id="titulo">PegaVaga precisa de você</strong>
+      <button type="button" class="fechar" id="fechar" title="Fechar (a vaga segue o caminho de sempre)">&times;</button>
+    </div>
+    <div class="corpo">
+      <p class="vaga" id="vaga" hidden></p>
+      <p class="msg" id="msg"></p>
+      <div id="campos"></div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="aplicar" id="aplicar">Aplicar e continuar</button>
+      <button type="button" class="manual" id="manual">Vou preencher à mão</button>
+      <button type="button" class="pular" id="pular">Pular esta vaga</button>
+    </div>
+  </div>
+  <script src="shared.js"></script>
+  <script src="ajuda.js"></script>
+</body>
+</html>

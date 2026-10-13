@@ -7,7 +7,9 @@
  *     alguma execução pausada por cota;
  *   - dentro da janela de horário configurada, abre a busca do LinkedIn e
  *     deixa o content.js varrer termo por termo;
- *   - fora da janela, encerra a execução que estiver rodando;
+ *   - fora da janela, encerra a execução AUTOMÁTICA que estiver rodando — a
+ *     varredura iniciada à mão é do usuário e roda a qualquer hora (as duas são
+ *     independentes; ver `filaAutomatica` no shared.ts);
  *   - respeita o período de descanso (proteção da conta) quando o LinkedIn
  *     sinaliza limite de uso: nem inicia, nem retoma nada enquanto ele durar;
  *   - quando uma cota (hora/24h/dia) libera espaço, cutuca a aba para o
@@ -55,12 +57,12 @@ importScripts('shared.js');
 
   /**
    * A fila em andamento (`pegavaga_run`) com o que o AGENDADOR acrescenta por
-   * conta própria: de onde ela partiu (`source`) e em que aba está rodando
-   * (`tabId`). O `shared.ts` não os conhece de propósito — quem escreve a fila
-   * é o pop-up (ou este worker) e o content script só lê a aba.
+   * conta própria: em qual aba ela está rodando (`tabId`). De onde a fila partiu
+   * (`source`) é contrato do `shared.ts`, que é quem responde "esta fila é do
+   * agendador?" (`filaAutomatica`) — e o pop-up escreve a fila dele sem marcar
+   * nada.
    */
   interface FilaDoAgendador extends FilaExecucao {
-    source?: string;
     tabId?: number | null;
   }
 
@@ -79,18 +81,23 @@ importScripts('shared.js');
   }
 
   /**
-   * O que CHEGA de fora ao worker (content script e pop-up). Cada mensagem usa
-   * um pedaço disto:
+   * O que CHEGA de fora ao worker (content script e pop-up).
    *
    *   - `PEGAVAGA_PROGRESS` e o próprio estado da fila são uma `EntradaLuz` — é
    *     o que a luz do ícone lê (`run`, `guard`, `scanning`, `breakUntil`);
-   *   - `PEGAVAGA_AJUDA_PEDIDO` traz o `pedidoId` de quem está esperando;
-   *   - `PEGAVAGA_AJUDA_FECHAR` traz o `avisoId` da notificação a recolher.
+   *   - `PEGAVAGA_AJUDA_PEDIDO` traz o `pedidoId`/vaga de quem está esperando;
+   *   - `PEGAVAGA_AJUDA_FECHAR` traz o `avisoId` do desktop a recolher.
    */
   interface MensagemRecebida extends EntradaLuz {
     type?: string;
     pedidoId?: unknown;
-    avisoId?: string;
+    avisoId?: unknown;
+    motivo?: unknown;
+    titulo?: unknown;
+    empresa?: unknown;
+    campos?: unknown;
+    acao?: unknown;
+    resposta?: unknown;
   }
 
   /** O que o worker manda para a aba do LinkedIn (o content script escuta). */
@@ -98,10 +105,8 @@ importScripts('shared.js');
     type: string;
     pedidoId?: string;
     acao?: string;
+    resposta?: Record<string, string>;
   }
-
-  /** A resposta ao pedido de ajuda: o id do aviso criado, ou o motivo de não dar. */
-  type RespostaDoAviso = { ok: true; id: string } | { ok: false; motivo: string };
 
   const SHARED = globalThis.PegaVagaShared;
   const STORAGE = SHARED.STORAGE;
@@ -174,19 +179,41 @@ importScripts('shared.js');
       return false;
     }
 
-    // (TEMPORÁRIO) Pedido de ajuda do content script: mostramos o aviso na área de
-    // trabalho e devolvemos se ele foi criado — o script só espera quando foi.
+    // O cartão de resposta abre como janela NO DESKTOP (ver a seção de ajuda).
     if (mensagem.type === MSG.AJUDA_PEDIDO) {
       mostrarAjuda(mensagem, sender)
         .then(sendResponse)
-        .catch(() => sendResponse({ ok: false, motivo: 'erro' }));
+        .catch(() => sendResponse({ ok: false }));
       return true; // a resposta é assíncrona
     }
 
-    // (TEMPORÁRIO) A espera acabou (decisão tomada ou prazo estourado): some com o
-    // aviso, para ele não ficar na tela pedindo algo que não existe mais.
+    // A sua decisão veio do cartão: encaminha para a aba certa e fecha a janela.
+    if (mensagem.type === MSG.AJUDA_RESPOSTA_JANELA) {
+      const avisoId = typeof mensagem.avisoId === 'string' ? mensagem.avisoId : '';
+      const acao = String(mensagem.acao || '');
+      const resposta =
+        mensagem.resposta && typeof mensagem.resposta === 'object'
+          ? (mensagem.resposta as Record<string, string>)
+          : undefined;
+
+      responderAjuda(avisoId, acao, resposta)
+        .then(() => {
+          if (sendResponse) sendResponse({ ok: true });
+        })
+        .catch(() => {
+          if (sendResponse) sendResponse({ ok: false });
+        });
+
+      return true; // resposta assíncrona
+    }
+
+    // O pedido acabou na aba (prazo/aborto): some com a janela, para ela não
+    // ficar na tela pedindo algo que não existe mais. Só se o id for NOSSO
+    // (ver `lerAjudaId`): a extensão não mexe no que é de fora.
     if (mensagem.type === MSG.AJUDA_FECHAR) {
-      limparAviso(mensagem.avisoId);
+      if (typeof mensagem.avisoId === 'string' && SHARED.lerAjudaId(mensagem.avisoId)) {
+        fecharJanela(mensagem.avisoId);
+      }
       sendResponse({ ok: true });
       return false;
     }
@@ -195,89 +222,124 @@ importScripts('shared.js');
   });
 
   /* ------------------------------------------------------------------------ */
-  /* (TEMPORÁRIO) Pedido de ajuda ao usuário                                  */
+  /* Pedido de ajuda: o cartão NO DESKTOP                                     */
   /* ------------------------------------------------------------------------ */
   //
-  // Quando a Candidatura Simplificada trava num campo que a extensão ainda não sabe
-  // responder — ou o envio demora a confirmar —, o content script pede ajuda e
-  // espera. Mostramos um aviso na área de trabalho com dois botões:
-  //
-  //   * "Vou preencher à mão" → a aba da vaga vem para a frente (com o foco na
-  //     janela dela) e a automação para e espera você terminar;
-  //   * "Pular esta vaga"     → a vaga é descartada e a varredura segue adiante.
-  //
-  // O id do aviso carrega o `tabId` (ver `SHARED.ajudaId`): o clique pode acordar o
-  // worker do zero, e é por ele que a decisão acha a aba que está esperando.
-  // Sai inteiro quando os campos personalizados forem tratados de verdade.
+  // O cartão de resposta (ajuda.html) abre como JANELA POPUP do Chrome — sem
+  // barra de endereço, sem abas, sem moldura: parece uma notificação grande no
+  // canto inferior direito do desktop. É o content script que pede (quando a
+  // candidatura trava), a janelinha responde com a sua decisão e o worker
+  // encaminha de volta para a ABA certa (o id do pedido carrega o `tabId`).
+  // Se a janela não abrir (não dá?), o content cai no cartão dentro da aba.
 
-  /** Cria a notificação. Devolve o id criado, ou '' quando não deu. */
-  function criarAviso(
-    id: string,
-    opcoes: chrome.notifications.NotificationCreateOptions
-  ): Promise<string> {
-    return new Promise<string>((resolve) => {
-      try {
-        chrome.notifications.create(id, opcoes, (criado) => {
-          resolve(!chrome.runtime.lastError ? criado || id : '');
-        });
-      } catch (error) {
-        resolve('');
-      }
-    });
-  }
+  /* Janelinhas abertas agora: id do pedido → id da janela (do Chrome). É por
+   * aqui que o worker sabe qual fechar quando a decisão (ou um "feche-se")
+   * chega — e sobrevive ao worker acordar do zero enquanto a janela espera. */
+  const ajudasAbertas = new Map<string, number>();
 
-  /** Monta e mostra o aviso do pedido de ajuda. */
+  /**
+   * Abre o cartão como JANELA do Chrome no desktop — só a barra de título e a
+   * borda do sistema (`type: 'popup'`). Devolve `{ ok, id, motivo }`: o `motivo`
+   * é o de-para da recusa, que o content script registra no console quando cai
+   * no cartão dentro da aba (é por ele que se descobre POR QUE a janela não
+   * abriu — API ausente, sem aba de origem, `create` recusado…).
+   */
   async function mostrarAjuda(
     dados: MensagemRecebida,
     sender: chrome.runtime.MessageSender
-  ): Promise<RespostaDoAviso> {
-    if (!chrome.notifications || typeof chrome.notifications.create !== 'function') {
-      return { ok: false, motivo: 'sem_notificacao' };
+  ): Promise<{ ok: boolean; id?: string; motivo?: string; recusa?: string }> {
+    if (!chrome.windows || typeof chrome.windows.create !== 'function') {
+      return { ok: false, motivo: 'sem_api_windows' }; // sem janelas: o content usa o cartão da aba
     }
 
-    const pedidoId = String((dados && dados.pedidoId) || '');
-    if (!pedidoId) return { ok: false, motivo: 'pedido_sem_id' };
+    const pedidoId = String(dados.pedidoId || '');
+    if (!pedidoId) return { ok: false, motivo: 'sem_pedido' };
 
     const tabId = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
     if (tabId == null) return { ok: false, motivo: 'sem_aba' }; // sem aba não há para quem responder
+
     const id = SHARED.ajudaId(tabId, pedidoId);
-    const texto = SHARED.textoDaAjuda(dados);
 
-    const criado = await criarAviso(id, {
-      type: 'basic',
-      iconUrl: chrome.runtime.getURL('icons/pg-128.png'),
-      title: texto.title,
-      message: texto.message,
-      buttons: (SHARED.AJUDA_BOTOES || []).map((title) => ({ title })),
-      requireInteraction: true, // o aviso fica na tela até você escolher
-      priority: 2,
-    });
+    /* O contexto (vaga, motivo e os CAMPOS com tipo/opções) viaja na própria
+     * URL como `?dados=...` JSON-codificado: a janelinha abre e já sabe o que
+     * desenhar — um <select> com as opções originais do LinkedIn, um <input>
+     * para texto. */
+    const contexto = encodeURIComponent(
+      JSON.stringify({
+        avisoId: id, // é o que a janelinha manda de volta (o id carrega a aba)
+        motivo: dados.motivo,
+        titulo: dados.titulo,
+        empresa: dados.empresa,
+        campos: dados.campos,
+      })
+    );
+    const url = chrome.runtime.getURL('ajuda.html') + '?dados=' + contexto;
 
-    return criado ? { ok: true, id: criado } : { ok: false, motivo: 'falha_ao_avisar' };
+    /* A janela PEDIDA é a `popup`: sem barra de endereço, sem abas, sem menu —
+     * só a barra de título e a borda do sistema, o mais capado que o Chrome
+     * oferece. Tentamos na ordem do mais "capado" para o menos:
+     *
+     *   1. `type: 'popup'` no formato mínimo (é o que costuma passar);
+     *   2. `type: 'popup'` com `setSelfAsOpener` (para a janela se fechar junto);
+     *   3. janela NORMAL — só como último recurso, para o pedido não se perder.
+     *
+     * O que falhou fica em `recusa` e volta na resposta (`{ ok: true, recusa }`):
+     * é o que permite ver no console POR QUE a `popup` não saiu, sem adivinhar. */
+    const tentativas: chrome.windows.CreateData[] = [
+      { url: url, type: 'popup', width: 372, height: 470, focused: true },
+      { url: url, type: 'popup', width: 372, height: 470, focused: true, setSelfAsOpener: true },
+      { url: url, width: 372, height: 470, focused: true },
+    ];
+
+    let janela: chrome.windows.Window | undefined;
+    let recusa = '';
+
+    for (const dadosDaJanela of tentativas) {
+      try {
+        janela = await chrome.windows.create(dadosDaJanela);
+        break;
+      } catch (error) {
+        recusa = String((error && (error as { message?: string }).message) || error);
+      }
+    }
+
+    const windowId = janela && janela.id != null ? janela.id : null;
+    if (windowId == null) return { ok: false, motivo: 'create_falhou:' + (recusa || 'sem_id') };
+
+    /* O `focused` sozinho não tira a janela de trás de outras no Linux: o
+     * pisca-pisca na dock/barra fica até você clicar nela (e o ajuda.js ainda
+     * a posiciona no canto inferior direito ao abrir). */
+    try {
+      await chrome.windows.update(windowId, { focused: true, drawAttention: true });
+    } catch (error) {
+      /* mover/focar é cortesia: a janela já existe e funciona */
+    }
+
+    ajudasAbertas.set(id, windowId);
+    return { ok: true, id: id, recusa: recusa || undefined };
   }
 
-  /** Some com o aviso (sem erro se ele já saiu). */
-  function limparAviso(avisoId?: string): void {
-    if (!avisoId || !chrome.notifications || typeof chrome.notifications.clear !== 'function') {
-      return;
-    }
+  /** Fecha a janelinha do cartão (sem erro se ela já saiu). */
+  function fecharJanela(ajudaId: string): void {
+    const windowId = ajudasAbertas.get(ajudaId);
+    if (windowId == null) return;
 
     try {
-      const resultado = chrome.notifications.clear(avisoId);
+      const resultado = chrome.windows.remove(windowId);
       if (resultado && typeof resultado.catch === 'function') resultado.catch(() => {});
     } catch (error) {
-      /* o aviso já saiu da tela */
+      /* a janela já saiu */
     }
+
+    ajudasAbertas.delete(ajudaId);
   }
 
   /**
    * Traz a aba da vaga para frente e dá o foco à janela dela. É o que o "Vou
-   * preencher à mão" precisa: você acabou de dizer que vai digitar no formulário,
-   * então ele tem que estar na sua frente — não atrás de outra aba (ou da janela
-   * do LinkedIn minimizada).
+   * preencher à mão" precisa: você acabou de dizer que vai digitar no
+   * formulário, então ele tem que estar na sua frente.
    *
-   * Nunca rejeita: sem foco, a decisão continua valendo (o content script espera
-   * do mesmo jeito).
+   * Nunca rejeita: sem foco, a decisão continua valendo.
    */
   async function focarAba(tabId: number | null): Promise<boolean> {
     if (tabId == null || !chrome.tabs || typeof chrome.tabs.update !== 'function') return false;
@@ -285,12 +347,13 @@ importScripts('shared.js');
     try {
       // `active: true` traz a aba para frente dentro da janela dela.
       const aba = await chrome.tabs.update(tabId, { active: true });
-      const janelaId = aba && aba.windowId != null ? aba.windowId : null;
+      const windowId = aba && aba.windowId != null ? aba.windowId : null;
 
-      // A janela pode estar atrás de outra (o caso comum: você clicou no aviso com
-      // o terminal na frente): é o `windows.update` que põe ela na frente.
-      if (janelaId != null && chrome.windows && typeof chrome.windows.update === 'function') {
-        await chrome.windows.update(janelaId, { focused: true });
+      // A janela pode estar atrás de outra (o caso comum: o cartão está no
+      // desktop com outra coisa na frente): é o `windows.update` que põe a
+      // janela do navegador inteira na frente.
+      if (windowId != null && chrome.windows && typeof chrome.windows.update === 'function') {
+        await chrome.windows.update(windowId, { focused: true });
       }
 
       return true;
@@ -300,22 +363,24 @@ importScripts('shared.js');
   }
 
   /**
-   * O usuário clicou num botão do aviso: leva a decisão de volta para a aba que
-   * está esperando e tira o aviso da tela. Fechar o aviso sem clicar não decide
-   * nada — a espera do content script tem prazo e segue o caminho de sempre.
+   * A sua decisão veio do cartão (janelinha): leva de volta para a aba que
+   * está esperando e fecha a janela. A `resposta` (o que você escolheu em cada
+   * campo) viaja junto — é o content script que a escreve nos campos travados.
    */
-  function responderAjuda(avisoId: string, indice: number): Promise<boolean> {
-    const alvo = SHARED.lerAjudaId(avisoId);
-    const acao = SHARED.acaoDaAjuda(indice);
+  function responderAjuda(
+    ajudaId: string,
+    acao: string,
+    resposta?: Record<string, string>
+  ): Promise<boolean> {
+    const alvo = SHARED.lerAjudaId(ajudaId);
 
-    limparAviso(avisoId);
+    fecharJanela(ajudaId);
 
     if (!alvo || !acao) return Promise.resolve(false);
 
-    // "Vou preencher à mão": a aba vai para a frente (e a janela ganha o foco)
-    // ANTES de a decisão chegar ao content script — você vai digitar nela agora.
-    // "Pular esta vaga" não mexe em foco: a varredura segue na aba que já está na
-    // sua frente.
+    // "Vou preencher à mão": a aba vai para a frente ANTES de a decisão chegar
+    // ao content script — você vai digitar nela agora. "Pular"/"Aplicar" não
+    // mexem em foco: a automação segue sozinha.
     const foco = acao === 'manual' ? focarAba(alvo.tabId) : Promise.resolve(false);
 
     return foco.then(() =>
@@ -323,14 +388,9 @@ importScripts('shared.js');
         type: MSG.AJUDA_RESPOSTA,
         pedidoId: alvo.pedidoId,
         acao: acao,
+        resposta: resposta,
       })
     );
-  }
-
-  if (chrome.notifications && chrome.notifications.onButtonClicked) {
-    chrome.notifications.onButtonClicked.addListener((avisoId, indice) => {
-      responderAjuda(avisoId, indice);
-    });
   }
 
   /* Ao subir um service worker novo, garante o alarme e a luz certos. */
@@ -379,6 +439,7 @@ importScripts('shared.js');
   /* ------------------------------------------------------------------------ */
 
   const iconBitmaps = new Map<number, ImageBitmap>(); // PNGs do logo já decodificados
+  const iconeFalhou: Record<number, boolean> = {}; // tamanho → não tenta o fetch de novo
   let paintedLight: string | null = null; // cor que está desenhada no ícone agora
 
   /**
@@ -517,11 +578,24 @@ importScripts('shared.js');
     const pronta = iconBitmaps.get(size);
     if (pronta) return pronta;
 
-    const response = await fetch(chrome.runtime.getURL(ICON_FILES[size]));
-    const bitmap = await createImageBitmap(await response.blob());
-    iconBitmaps.set(size, bitmap);
+    /* Se o contexto da extensão morreu (p. ex. você recarregou a extensão com
+     * a aba aberta), `getURL` devolve `chrome-extension://invalid/...` e o
+     * fetch falha. Sem esta guarda, cada tick tentava de novo — era o spam de
+     * `net::ERR_FAILED` no console. Com ela, a falha é memorizada e a luz do
+     * ícone cai no selo do canto (plano B), sem erro novo. */
+    if (!chrome.runtime || !chrome.runtime.id) throw new Error('contexto morto');
+    if (iconeFalhou[size]) throw new Error('ícone indisponível');
 
-    return bitmap;
+    try {
+      const response = await fetch(chrome.runtime.getURL(ICON_FILES[size]));
+      const bitmap = await createImageBitmap(await response.blob());
+      iconBitmaps.set(size, bitmap);
+
+      return bitmap;
+    } catch (error) {
+      iconeFalhou[size] = true; // não tenta de novo neste ciclo de vida do worker
+      throw error;
+    }
   }
 
   /* ------------------------------------------------------------------------ */
@@ -583,8 +657,17 @@ importScripts('shared.js');
       return;
     }
 
-    // 1) Passou do horário: encerra a execução em andamento (a pausada espera).
-    if (run && run.running && !run.paused && settings.schedule.enabled && !inWindow) {
+    // 1) Passou do horário: encerra a execução AUTOMÁTICA em andamento. Uma fila
+    //    iniciada à mão é do usuário: ela segue até o fim (ou até ele clicar em
+    //    Parar), a qualquer hora — a janela governa só o que o agendador montou.
+    if (
+      run &&
+      run.running &&
+      !run.paused &&
+      settings.schedule.enabled &&
+      !inWindow &&
+      SHARED.filaAutomatica(run)
+    ) {
       await stopRun(run);
       await syncAlarm();
       return;
@@ -598,8 +681,14 @@ importScripts('shared.js');
     }
 
     // 3) Execução pausada por cota: retoma quando a próxima vaga liberar.
-    //    Fora da janela agendada ela continua parada (volta quando o horário abrir).
-    if (run && run.running && run.paused && (!settings.schedule.enabled || inWindow)) {
+    //    A fila automática só volta dentro da janela agendada (volta quando o
+    //    horário abrir); a do usuário retoma a qualquer hora.
+    if (
+      run &&
+      run.running &&
+      run.paused &&
+      (!SHARED.filaAutomatica(run) || !settings.schedule.enabled || inWindow)
+    ) {
       const quota = SHARED.computeQuota(settings, state.apps, now, run.appliedInTerm || 0);
 
       if (quota.ok) {
@@ -640,7 +729,7 @@ importScripts('shared.js');
   /** Monta a fila e manda a aba do LinkedIn carregar o primeiro termo. */
   async function startRun(settings: Configuracoes): Promise<void> {
     const run: FilaDoAgendador = SHARED.buildRunQueue(settings);
-    run.source = 'agendador';
+    run.source = SHARED.ORIGEM_AGENDADOR;
 
     const firstUrl = run.urls[0] || SHARED.LINKEDIN_SEARCH_URL;
     const focus = settings.schedule.focusTab !== false;

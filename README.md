@@ -237,21 +237,26 @@ Não há upload de foto: o "rosto" da conta são as **iniciais do e-mail** (o se
 não guarda imagem). Os ícones das seções (Configurações, Administração) são SVGs do
 mesmo tamanho, e a tela de conta só aparece quando é chamada pelo avatar.
 
-**O painel 🛠 Administração** (no menu do avatar) aparece **apenas** quando a resposta do servidor traz
-`features.painelAdmin: true` — o que só acontece para uma conta de administrador.
-Não há atalho, botão ou opção que o abra por conta própria: se o painel sumiu, a
-conta perdeu o papel. Com ele dá para:
+**O painel 🛠 Administração** (no menu do avatar) aparece **apenas** para uma conta de
+administrador — pelo `features.painelAdmin: true` da resposta do servidor ou pelo
+`papel: "admin"` da sessão (é o que impede o painel de sumir quando o `/plano` não
+responde e o perfil cai no free). Não há atalho, botão ou opção que o abra por conta
+própria: se o painel sumiu, a conta perdeu o papel. Com ele dá para:
 
 - **Ver a tela como Free/Premium** — o perfil vem do servidor (`/plano?simular=`) e
-  **não** altera o seu direito;
+  **não** altera o seu direito. Como o administrador **já é premium** (o plano dele
+  vem do papel, sem licença), o selo da build marca `edição X (simulação)` e o botão
+  **Meu plano** traz a tela real de volta;
 - **Emitir/renovar licença** (`POST /admin/licenca` com `acao: "emitir"`) e
   **revogar** direto na lista;
-- **Trocar o endereço da API** (por padrão, `http://127.0.0.1:8787`).
+- **Trocar o endereço da API** — o campo já vem preenchido com o endereço em vigor
+  (o salvo ou o padrão `http://127.0.0.1:8787`, o mesmo do `docker compose`).
 
 Três garantias que os testes cobrem:
 
 - **O plano nunca sai do token**: cada `/plano` é reconsultado no cadastro, então
-  cancelar, vencer ou revogar vale **na hora**;
+  cancelar, vencer ou revogar vale **na hora** — só o administrador fica fora disso,
+  porque o plano dele não vem de licença nenhuma;
 - **Sessão recusada volta ao free**: um `401` descarta a credencial e a tela volta
   ao free na mesma abertura;
 - **Rede fora não derruba quem tem assinatura**: o último perfil concedido fica em

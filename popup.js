@@ -59,6 +59,12 @@ const PAUSE_LABELS = SHARED.PAUSE_REASON_LABELS;
 const SAVE_DELAY_MS = 400; // debounce do salvamento automático da configuração
 const DAY_LABELS = SHARED.WEEKDAYS;
 
+/* Rótulos do botão Iniciar: o normal e o de quando o agendador está no comando da
+ * janela — aí a varredura é dele e o botão sai de cena (ver `agendadorNoComando`,
+ * no shared.js). */
+const START_LABEL = '▶ Iniciar Busca e Varredura';
+const AUTOMATIC_SCAN_LABEL = 'Varredura automática em execução';
+
 /** Aviso quando o recurso pertence a outra edição (o free, por exemplo, não exporta). */
 const AVISO_PREMIUM_EXPORT =
   'A exportação de relatórios é um recurso Premium — no free os dados ficam só neste navegador.';
@@ -122,6 +128,7 @@ function cacheElements() {
   els.settingsHint = document.getElementById('settings-hint');
   els.scheduleHint = document.getElementById('schedule-hint');
   els.applyEnabled = document.getElementById('apply-enabled');
+  els.applyOnlyEasy = document.getElementById('apply-only-easy');
   els.applyPerTerm = document.getElementById('apply-per-term');
   els.applyHour = document.getElementById('apply-hour');
   els.apply24h = document.getElementById('apply-24h');
@@ -207,6 +214,7 @@ function cacheElements() {
   els.btnRecarregar = document.getElementById('btn-recarregar');
   els.btnSimularFree = document.getElementById('btn-simular-free');
   els.btnSimularPremium = document.getElementById('btn-simular-premium');
+  els.btnSimularReal = document.getElementById('btn-simular-real');
 }
 
 /** Versão declarada no manifest — é a mesma que o Chrome mostra em chrome://extensions. */
@@ -276,11 +284,24 @@ function aplicarPerfilNaUI() {
 
   if (els.buildInfo) {
     const versao = versaoExtensao();
+    // `simulado` é verdade só no "ver a tela como" do administrador: a edição
+    // mostrada não é a da conta dona da tela, e ele precisa saber disso o tempo
+    // todo (o aviso do painel passa). É por isso que a marca entra no selo, que
+    // está sempre à vista.
     els.buildInfo.textContent =
-      (versao ? 'v' + versao + ' · ' : '') + 'edição ' + perfil.rotulo;
+      (versao ? 'v' + versao + ' · ' : '') +
+      'edição ' +
+      perfil.rotulo +
+      (perfil.simulado ? ' (simulação)' : '');
+
     // Quando o perfil não é o de produção (free), o selo fica marcado — assim
     // ninguém confunde uma tela com assinatura ativa com a build do usuário final.
-    els.buildInfo.className = perfil.chave === 'free' ? 'build' : 'build premium';
+    // A simulação tem marca própria, e ela vence as outras: ali a tela não é a de
+    // quem está olhando.
+    let marca = '';
+    if (perfil.simulado) marca = ' simulado';
+    else if (perfil.chave !== 'free') marca = ' premium';
+    els.buildInfo.className = 'build' + marca;
   }
 
   if (els.termsLimitHint) {
@@ -300,6 +321,22 @@ function aplicarPerfilNaUI() {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Redesenha a tela depois de o PERFIL mudar — entrar, sair ou "ver a tela como".
+ *
+ * Uma lista só, num lugar só, de propósito: o perfil decide o que aparece (as
+ * features escondem campos, os limites travam cotas, o papel abre o painel), então
+ * quem troca o perfil precisa refazer a tela inteira. Redesenhar pela metade deixa
+ * uma edição misturada com a outra — era assim que a simulação "não fazia nada".
+ */
+async function aplicarPerfilNaTela() {
+  aplicarPerfilNaUI();
+  await loadSettingsToForm();
+  await renderConta();
+  await renderAdmin();
+  await refresh();
+}
+
+/**
  * Pergunta o plano ao servidor quando existe sessão, e redesenha a tela com a
  * resposta. Sem sessão não há chamada de rede: o free é local por definição.
  * Quando o servidor recusa a credencial (401/403), o próprio shared já volta ao
@@ -311,16 +348,36 @@ async function sincronizarPerfil() {
   // Redesenha SEMPRE: o servidor pode ter concedido, recusado (401 → free) ou
   // simplesmente confirmado o que já valia. Não redesenhar é o que faria o painel
   // do administrador continuar na tela depois de a sessão cair.
-  aplicarPerfilNaUI();
-  await loadSettingsToForm();
-  await renderConta();
-  await renderAdmin();
-  await refresh();
+  await aplicarPerfilNaTela();
 
   if (!resultado.ok && resultado.erro !== 'rede') {
     setStatus(resultado.mensagem, 'warn');
   }
   return resultado;
+}
+
+/**
+ * Traz do SERVIDOR as configurações da conta que acabou de entrar.
+ *
+ * Duas situações, um caminho só: se a conta JÁ tem configurações no banco, elas
+ * vêm e passam a valer aqui ("ao relogar, puxa do banco"); se o banco está vazio
+ * (primeiro login), sobem as que já estavam neste navegador — entrar não zera a
+ * busca de quem configurou tudo antes de assinar. Sem rede/sessão, não mexe em
+ * nada: o que está na tela continua sendo o local.
+ */
+async function sincronizarConfiguracoes() {
+  const remoto = await SHARED.lerConfig();
+  if (!remoto.ok) return;
+
+  if (remoto.config && Object.keys(remoto.config).length) {
+    const parsed = SHARED.parseSettings(remoto.config);
+    settings = parsed;
+    await chrome.storage.local.set({ [STORAGE_SETTINGS_KEY]: parsed });
+    return;
+  }
+
+  const atuais = await getSettings();
+  await SHARED.salvarConfig(atuais);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -458,10 +515,10 @@ async function onContaClick() {
   abrirConta('entrar');
 }
 
-/** "Painel de administração" no menu: só existe com o papel vindo do servidor. */
+/** "Painel de administração" no menu: só com o papel que o servidor concedeu. */
 async function onMenuAdminClick() {
   fecharMenu();
-  if (!SHARED.temFeature('painelAdmin')) return;
+  if (!ehAdmin(await SHARED.lerSessao())) return;
 
   if (els.adminPanel) els.adminPanel.open = true;
   await carregarLicencas();
@@ -493,13 +550,29 @@ function onDocumentoClick(evento) {
   fecharMenu();
 }
 
+/**
+ * A conta tem o papel de administrador? O papel chega por DOIS caminhos do
+ * servidor: assinado na sessão (`sessao.papel`) e repetido em
+ * `features.painelAdmin` na resposta do `/plano`.
+ *
+ * Lemos os dois de propósito: se o `/plano` não responder (ou o cache do perfil
+ * vencer, e o perfil cair no free), o papel da sessão continua valendo — e o
+ * painel não some até você entrar de novo. Nada é concedido aqui: cada ação do
+ * painel bate nas rotas `/admin/*`, e é o servidor quem recusa (403) quem não é
+ * administrador.
+ */
+function ehAdmin(sessao) {
+  if (SHARED.temFeature('painelAdmin')) return true;
+  return Boolean(sessao && sessao.papel === 'admin');
+}
+
 /** Desenha o bloco de conta a partir da sessão e do perfil que estão valendo. */
 async function renderConta() {
   const sessao = await SHARED.lerSessao();
   const perfil = SHARED.perfilEdicao();
   const logado = Boolean(sessao);
   const premium = SHARED.temFeature('export');
-  const admin = SHARED.temFeature('painelAdmin');
+  const admin = ehAdmin(sessao);
   const email = (sessao && sessao.email) || '';
 
   if (els.contaForm) els.contaForm.hidden = logado;
@@ -602,22 +675,21 @@ async function conectar(criar) {
     'ok'
   );
 
-  aplicarPerfilNaUI();
-  await loadSettingsToForm();
-  await renderConta();
-  await renderAdmin();
-  await refresh();
+  // Configurações: o que a conta tem no banco vem (ou, no primeiro login, sobem
+  // as daqui) ANTES de a tela ser redesenhada — assim o formulário já aparece com
+  // o que vai valer de verdade.
+  await sincronizarConfiguracoes();
+
+  await aplicarPerfilNaTela();
 }
 
 async function onSairClick() {
+  // O `SHARED.sair()` já devolve as configurações do free ao lugar (a cópia que o
+  // login guardou); a tela é redesenhada logo abaixo com elas.
   await SHARED.sair();
   fecharMenu();
 
-  aplicarPerfilNaUI();
-  await loadSettingsToForm();
-  await renderConta();
-  await renderAdmin();
-  await refresh();
+  await aplicarPerfilNaTela();
 
   // Quem saiu volta para a tela de entrar — é ali que a próxima ação acontece.
   abrirConta('entrar');
@@ -636,17 +708,20 @@ function setContaAviso(mensagem, trabalhando) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Mostra o painel SÓ quando o perfil ativo traz `painelAdmin` — e essa feature só
- * chega pelo `/plano` assinado pelo servidor. Não existe atalho, botão ou opção
- * que o abra por conta própria: se o painel sumiu, a conta perdeu o papel.
+ * Mostra o painel quando a conta tem o papel de administrador — lido da sessão
+ * e/ou do `painelAdmin` do perfil (ver `ehAdmin`). Não existe atalho, botão ou
+ * opção que o abra por conta própria: sem o papel, o servidor nem responde as
+ * rotas `/admin/*`.
  */
 async function renderAdmin() {
-  const permitido = SHARED.temFeature('painelAdmin');
+  const permitido = ehAdmin(await SHARED.lerSessao());
 
   if (els.adminPanel) els.adminPanel.hidden = !permitido;
   if (!permitido) return false;
 
-  if (els.admApi) els.admApi.value = await SHARED.lerApi();
+  // O campo mostra o endereço EM VIGOR (o salvo ou o padrão do projeto), não o
+  // que está guardado: um campo vazio não diria para onde a extensão fala.
+  if (els.admApi) els.admApi.value = await SHARED.apiUrl();
   await carregarLicencas();
   return true;
 }
@@ -771,12 +846,32 @@ async function onSimularClick(chave) {
     return;
   }
 
-  aplicarPerfilNaUI();
-  await loadSettingsToForm();
+  // Redesenha a tela inteira: uma simulação mostrada pela metade (campos de uma
+  // edição, cotas de outra) parece que não funcionou. O painel continua no lugar
+  // porque o papel vem da SESSÃO (ver `ehAdmin`), e não do perfil simulado.
+  await aplicarPerfilNaTela();
+
   setAdmStatus(
     'Mostrando a tela como ' +
       SHARED.perfilEdicao().rotulo +
-      ' (simulação — o seu direito não mudou).'
+      ' — simulação, o seu direito não mudou. "Meu plano" volta à sua tela.'
+  );
+}
+
+/**
+ * Desfaz o "ver a tela como" e volta ao plano que o servidor concede de verdade.
+ *
+ * Não precisa de plano B para a rede fora: quem reaplica o último perfil concedido
+ * (o do cache) quando o `/plano` não responde é o `sincronizarPlano` do shared, e a
+ * simulação nunca é gravada lá — então a tela volta ao seu plano de qualquer jeito.
+ */
+async function onVoltarAoPlanoClick() {
+  const resultado = await sincronizarPerfil();
+
+  setAdmStatus(
+    'De volta ao seu plano: ' +
+      SHARED.perfilEdicao().rotulo +
+      (resultado.ok ? '.' : ' — sem rede, voltei pelo último perfil concedido.')
   );
 }
 
@@ -842,6 +937,7 @@ function bindEvents() {
 
   [
     els.applyEnabled,
+    els.applyOnlyEasy,
     els.applyRespectUser,
     els.applyBreaks,
     els.applyFillRequired,
@@ -894,6 +990,7 @@ function bindEvents() {
   if (els.btnSimularPremium) {
     els.btnSimularPremium.addEventListener('click', () => onSimularClick('premium'));
   }
+  if (els.btnSimularReal) els.btnSimularReal.addEventListener('click', onVoltarAoPlanoClick);
   if (els.admApi) els.admApi.addEventListener('change', onApiChange);
 }
 
@@ -936,9 +1033,11 @@ async function onStartClick() {
   // Resumo da fila, usado nas mensagens de início ("3 termos em loop (a → b)").
   const queue = describeQueue(run);
 
-  // Se o agendador estiver ligado (ou a proteção da conta ativa), a execução
-  // vai esperar: avisamos no mesmo lugar.
-  const warn = buildWindowWarning(parsed) || buildGuardWarning(await getGuard());
+  // A varredura pedida aqui é sua: ela roda a qualquer hora, independente do
+  // agendador (a janela governa só a fila que o agendador monta). Quem ainda pode
+  // segurá-la é a proteção da conta — o LinkedIn sinalizou limite de uso — e isso
+  // a gente avisa no mesmo lugar.
+  const warn = buildGuardWarning(await getGuard());
 
   /** Fala na barra de status, avisando do agendador quando for o caso. */
   const say = (message, type) =>
@@ -989,19 +1088,6 @@ async function onStartClick() {
     run.tabId = created.id;
     await chrome.storage.local.set({ [STORAGE_RUN_KEY]: run });
   }
-}
-
-/** Aviso quando o agendador está ligado e o horário ainda não chegou. */
-function buildWindowWarning(parsed) {
-  const now = new Date();
-
-  if (!parsed.schedule.enabled) return '';
-  if (SHARED.isWithinSchedule(now, parsed.schedule)) return '';
-
-  const next = SHARED.nextScheduleStart(now, parsed.schedule);
-  const when = next ? ' às ' + SHARED.formatClock(next.getTime()) : '';
-
-  return 'Fora da janela do agendador' + when + ': a varredura fica aguardando o horário.';
 }
 
 /** Dispara a varredura numa aba já carregada e trata a resposta. */
@@ -1092,6 +1178,7 @@ async function loadSettingsToForm() {
   els.baseUrl.value = settings.baseUrl;
   els.location.value = settings.location;
   els.terms.value = settings.terms.join('\n');
+  els.applyOnlyEasy.checked = settings.onlyEasyApply;
 
   els.applyEnabled.checked = settings.apply.enabled;
   els.applyPerTerm.value = String(settings.apply.perTerm);
@@ -1123,11 +1210,34 @@ async function loadSettingsToForm() {
   renderTermsQueue();
   renderQuota();
   renderScheduleHint();
+
+  // O aviso do formulário volta ao neutro: quem redesenhou a tela não quer ver
+  // "Salvando…" nem o aviso de uma simulação que já terminou (ver
+  // `saveSettingsFromForm`, que é quem escreve os outros recados).
+  if (els.settingsHint) {
+    els.settingsHint.className = 'hint';
+    els.settingsHint.textContent = 'Salvo automaticamente.';
+  }
 }
 
 async function getSettings() {
   const data = await chrome.storage.local.get(STORAGE_SETTINGS_KEY);
   return SHARED.parseSettings(data[STORAGE_SETTINGS_KEY]);
+}
+
+/**
+ * Manda as configurações para o SERVIDOR quando há sessão — é o banco do premium.
+ *
+ * Melhor esforço, de propósito: o local já foi gravado (é ele que a extensão lê a
+ * cada segundo), então servidor fora ou sem rede não atrapalha a varredura — a
+ * próxima gravação tenta de novo. O free nunca chega aqui: sem sessão, não há o
+ * que sincronizar e nada é chamado.
+ */
+async function salvarConfigNoServidor(parsed) {
+  const sessao = await SHARED.sessaoGuardada();
+  if (!sessao || !sessao.token) return;
+
+  await SHARED.salvarConfig(parsed);
 }
 
 /** O formulário mostra segundos; o storage guarda milissegundos. */
@@ -1202,6 +1312,7 @@ async function saveSettingsFromForm(options) {
     baseUrl: els.baseUrl.value,
     location: els.location.value,
     terms: els.terms.value,
+    onlyEasyApply: els.applyOnlyEasy.checked,
     apply: {
       enabled: els.applyEnabled.checked,
       perTerm: els.applyPerTerm.value,
@@ -1245,7 +1356,27 @@ async function saveSettingsFromForm(options) {
   }
 
   settings = parsed;
+
+  // Numa simulação NÃO gravamos: `parsed` saiu do perfil simulado, e escrevê-lo
+  // trocaria as configurações de verdade pelas travas do outro plano (os 40 termos
+  // do admin viram 2, as cotas ficam fixas...). Vale para o auto-save enquanto ele
+  // digita e para o "Iniciar busca", que também passa por aqui. A tela mostra o
+  // outro plano; o que é seu fica no seu.
+  if (SHARED.perfilEdicao().simulado) {
+    if (!silent) {
+      els.settingsHint.className = 'hint warn';
+      els.settingsHint.textContent =
+        'Tela simulada: as configurações não estão sendo salvas. Clique em "Meu plano" para voltar.';
+    }
+    return parsed;
+  }
+
   await chrome.storage.local.set({ [STORAGE_SETTINGS_KEY]: parsed });
+
+  // Com conta, as mesmas configurações vão para o banco (o free fica só aqui). Em
+  // segundo plano: o "Salvando…" da tela não espera a rede, e a varredura lê o
+  // local, que já está gravado.
+  salvarConfigNoServidor(parsed).catch(() => {});
 
   renderTermsQueue();
   renderQuota();
@@ -1422,8 +1553,11 @@ function renderQuota() {
   els.quotaInfo.textContent = SHARED.describeQuota(quota);
 }
 
-/** Explica o agendador: janela, próxima abertura ou pausa por cota. */
+/** Explica o agendador na interface: janela, próxima abertura, pausa por cota — e
+ * se o botão Iniciar está à disposição (com o agendador no comando, não está). */
 function renderScheduleHint() {
+  renderStartButton();
+
   if (!els.scheduleHint) return;
 
   const now = new Date();
@@ -1514,9 +1648,24 @@ async function syncScanningState() {
 
 function setScanning(isScanning) {
   scanCache = Boolean(isScanning);
-  els.btnStart.disabled = scanCache;
-  els.btnStop.disabled = !scanCache;
+  renderStartButton();
   renderStatusLight();
+}
+
+/**
+ * Trava e rótulo do botão Iniciar.
+ *
+ * Com o agendador no comando da janela (`agendadorNoComando`, no shared.js), a
+ * varredura é dele: o Iniciar sai de cena e o rótulo diz o que está rodando. Fora
+ * disso nada muda — uma varredura iniciada à mão é do usuário e roda a qualquer
+ * hora, então o botão continua à disposição.
+ */
+function renderStartButton() {
+  const automatic = SHARED.agendadorNoComando(settings.schedule, runCache, new Date());
+
+  els.btnStart.textContent = automatic ? AUTOMATIC_SCAN_LABEL : START_LABEL;
+  els.btnStart.disabled = scanCache || automatic;
+  els.btnStop.disabled = !scanCache;
 }
 
 /**
@@ -1693,12 +1842,7 @@ function onStorageChanged(changes, areaName) {
   // depende do que o servidor concedeu.
   if (changes[STORAGE_PERFIL_KEY] || changes[STORAGE_SESSAO_KEY]) {
     SHARED.aplicarPerfilSalvo()
-      .then(() => {
-        aplicarPerfilNaUI();
-        return loadSettingsToForm();
-      })
-      .then(() => Promise.all([renderConta(), renderAdmin()]))
-      .then(() => refresh())
+      .then(aplicarPerfilNaTela)
       .catch(() => {});
   }
 
