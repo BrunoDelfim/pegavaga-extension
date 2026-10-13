@@ -3498,7 +3498,19 @@
       // mostrou — mesma origem (`fieldLabel`), para não escrever no campo errado.
       // A busca é feita na hora (o modal pode ter sido reconstruído desde que
       // o cartão abriu): inválidos primeiro, depois o formulário inteiro.
-      let campo = buscarCampo(alvoPergunta);
+      /* A busca do campo fica FORA do `try` de cada ramo (logo abaixo) — então ela
+       * também precisa da guarda: um campo quebrado aqui derrubava a varredura
+       * inteira, e o `finally` do `startScan` ainda navegava para o próximo termo. */
+      let campo = null;
+      try {
+        campo = buscarCampo(alvoPergunta);
+      } catch (erroDeBusca) {
+        console.error(
+          '[PegaVaga] falha ao localizar o campo "' + rotulo + '" (seguindo):',
+          erroDeBusca
+        );
+        continue;
+      }
 
       if (!campo) continue;
 
@@ -4496,7 +4508,10 @@
       result.status === 'pulada' ||
       result.status === 'externa' ||
       result.status === 'travada' ||
-      result.status === 'incompleta';
+      result.status === 'incompleta' ||
+      // Uma falha inesperada na vaga conta tentativa: sem isso, uma vaga que
+      // quebra sempre seria retentada a cada passada, para sempre.
+      result.status === 'erro';
 
     const attempts = gastatentativa
       ? Math.min(CONFIG.applyMaxAttempts, (current.applyAttempts || 0) + 1)
@@ -4881,8 +4896,31 @@
 
   /**
    * Visita a vaga: captura a descrição e, se a cota permitir, candidata-se.
+   *
+   * O corpo vive no `visitarVaga` de propósito: uma falha em UMA vaga não pode
+   * derrubar a varredura — sem isso, a exceção subia até o `finally` do
+   * `startScan`, que a lia como fim de termo e **recarregava a página** no meio da
+   * lista. Aqui a falha fica registrada na vaga e a varredura segue para a próxima.
    */
   async function processCard(card, id, settings) {
+    try {
+      await visitarVaga(card, id, settings);
+    } catch (erro) {
+      console.error('[PegaVaga] falha ao processar a vaga ' + id + ' (seguindo):', erro);
+
+      try {
+        await recordApplyResult(id, {
+          status: 'erro',
+          error: String((erro && erro.message) || erro),
+        });
+      } catch (erroAoRegistrar) {
+        /* registrar é cortesia: o que importa é não derrubar a varredura */
+      }
+    }
+  }
+
+  /** O corpo do `processCard` (isolado para a falha de UMA vaga não parar tudo). */
+  async function visitarVaga(card, id, settings) {
     // Formulário/popup de uma vaga anterior pode estar cobrindo a lista: sem
     // isso, o clique no card não abre a vaga. Só mexemos na página se ela
     // estiver livre — a sua vez vem antes de tudo. Quando não está, o guard
@@ -4975,6 +5013,7 @@
 
     let stop = null; // 'quota' | 'term_done' | 'scan_cap' | 'usuario'
     let round = 0;
+    let erroRegistrado = null; // exceção no meio da varredura: NÃO é fim de termo
 
     try {
       await loadApps();
@@ -5051,6 +5090,20 @@
 
         round += 1;
       }
+    } catch (erroNaVarredura) {
+      /* Uma exceção no meio da varredura NÃO é "o termo acabou".
+       *
+       * Sem este catch, o `finally` abaixo tratava a queda como fim de termo e
+       * chamava o `advanceRun()` — que NAVEGA para o próximo termo. Era isso que
+       * recarregava a página logo depois de você enviar os dados no cartão (e o
+       * log ia junto com o recarregamento, o que fazia parecer que nada tinha
+       * acontecido). Agora a falha é registrada, a fila fica como está e a
+       * próxima passada tenta de novo. */
+      erroRegistrado = erroNaVarredura;
+      console.error(
+        '[PegaVaga] erro inesperado na varredura (a fila NAO avanca; a pagina nao recarrega):',
+        erroNaVarredura
+      );
     } finally {
       state.scanning = false;
       const aborted = state.abort;
@@ -5058,13 +5111,22 @@
 
       // Página sem a lista de vagas: é o caso que acende a luz vermelha do ícone
       // ("precisa de atenção"). O aviso é recalculado a cada varredura, então
-      // nunca fica velho — basta a próxima página carregar bem para apagar.
-      await setRunProblem(scanProblem());
+      // nunca fica velho — basta a próxima página carregar bem para apagar. Um
+      // erro inesperado vira esse mesmo aviso (fica no storage, então sobrevive a
+      // recarregamentos e aparece no pop-up).
+      await setRunProblem(
+        erroRegistrado
+          ? 'erro: ' + String((erroRegistrado && erroRegistrado.message) || erroRegistrado).slice(0, 120)
+          : scanProblem()
+      );
 
       await persist();
       broadcastProgress();
 
-      if (!aborted) {
+      /* Com erro na varredura, NÃO avança de termo: a fila fica onde está e a
+       * próxima passada tenta de novo (era o `advanceRun` aqui que recarregava a
+       * página depois de uma queda no meio do fluxo). */
+      if (!aborted && !erroRegistrado) {
         // Cota estourada (ou vez do usuário): pausa e volta sozinho. Nos demais
         // casos, segue para o próximo termo da fila.
         if (stop === 'quota') {
