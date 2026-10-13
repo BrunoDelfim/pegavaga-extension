@@ -141,23 +141,23 @@
     );
 
     /* E sem espaço em branco: o último campo termina onde o corpo termina (sem o
-     * padding de baixo sobrando) e os botões começam logo depois — 8px, o respiro
-     * do próprio bloco de botões. */
+     * padding de baixo sobrando) e o BOTÃO começa logo depois — 8px, o respiro do
+     * próprio bloco de botões (o `padding-top` dele). */
     const ultimoCampo = Array.prototype.slice
       .call(document.querySelectorAll('#campos .campo'))
       .pop();
-    const acoes = document.querySelector('.acoes');
+    const botao = document.getElementById('aplicar');
 
     ok(
-      'os botoes colam no ultimo campo (sem espaco em branco)',
-      Boolean(ultimoCampo && acoes) &&
+      'o botao cola no ultimo campo (sem espaco em branco)',
+      Boolean(ultimoCampo && botao) &&
         Math.abs(
-          acoes.getBoundingClientRect().top - ultimoCampo.getBoundingClientRect().bottom - 8
+          botao.getBoundingClientRect().top - ultimoCampo.getBoundingClientRect().bottom - 8
         ) <= 2,
       'campo ate=' +
         (ultimoCampo ? Math.round(ultimoCampo.getBoundingClientRect().bottom) : '?') +
-        ' botoes em=' +
-        (acoes ? Math.round(acoes.getBoundingClientRect().top) : '?')
+        ' botao em=' +
+        (botao ? Math.round(botao.getBoundingClientRect().top) : '?')
     );
 
     const MARGEM = 16;
