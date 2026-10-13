@@ -38,6 +38,14 @@ var apiShared = (() => {
          * vez (o ajuda.js guarda ao arrastar e usa na próxima abertura). */
         pos: 'pegavaga_ajuda_pos',
     };
+    /* A janelinha do pedido de ajuda: a LARGURA é fixa e a ALTURA de criação é o
+     * TETO (o ajuda.js encolhe a janela até o conteúdo; acima do teto, o corpo rola).
+     * Estes números são os mesmos nos três lugares que mexem com a janela — o worker
+     * que a cria, a aba que diz onde ela nasce e o ajuda.js que a redimensiona. */
+    const JANELINHA = {
+        largura: 372,
+        altura: 470,
+    };
     /* Tipos de mensagem trocadas entre pop-up, content script e agendador. */
     const MSG = {
         START: 'PEGAVAGA_START',
@@ -1925,6 +1933,7 @@ var apiShared = (() => {
     /* ------------------------------------------------------------------------ */
     return {
         STORAGE,
+        JANELINHA,
         MSG,
         DEFAULT_SETTINGS,
         PAUSE_REASON_LABELS,

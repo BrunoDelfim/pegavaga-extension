@@ -86,15 +86,36 @@
     /* A JANELA: altura do conteúdo, canto inferior direito e posição guardada */
     /* ---------------------------------------------------------------------- */
 
+    /* A moldura da janela é ajustada em passos (a altura casa com o conteúdo e a
+     * posição vem depois): esperamos as atualizações antes de conferir. */
+    await esperar(() => window.__pgvJanela.atualizacoes.length >= 2, 6000);
+
     const janela = window.__pgvJanela.janela;
     const cartao = document.getElementById('cartao');
-    const alturaConteudo = Math.ceil(cartao.getBoundingClientRect().height);
     const guardadaAntes = (window.__pgvDados || {}).pegavaga_ajuda_pos;
 
     ok(
-      'a janela nao tem altura fixa: ela acompanha o conteudo (min 176, max 470)',
-      janela.height >= 176 && janela.height <= 470 && janela.height >= alturaConteudo,
-      'altura=' + janela.height + ' conteudo=' + alturaConteudo
+      'a janela encolheu para o CONTEUDO (nada de altura fixa)',
+      janela.height < 470 && janela.height >= 176,
+      'altura=' + janela.height
+    );
+
+    /* A regra da altura: a janela termina MARGEM (5px) abaixo do último elemento do
+     * cartão — não é o tamanho do container interno. */
+    const topoDoCartao = cartao.getBoundingClientRect().top;
+    const filhosDoCartao = Array.prototype.slice.call(cartao.children).reverse();
+    const ultimo = filhosDoCartao.find((f) => f.getBoundingClientRect().height) || cartao;
+    const ateOMargem = Math.ceil(ultimo.getBoundingClientRect().bottom - topoDoCartao) + 5;
+
+    ok(
+      'a janela termina 5px abaixo do ultimo elemento (a margem)',
+      Math.abs(window.innerHeight - ateOMargem) <= 2,
+      'espaco da pagina=' +
+        window.innerHeight +
+        ' esperado=' +
+        ateOMargem +
+        ' janela=' +
+        janela.height
     );
 
     const MARGEM = 16;

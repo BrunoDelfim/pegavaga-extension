@@ -98,6 +98,10 @@ importScripts('shared.js');
     campos?: unknown;
     acao?: unknown;
     resposta?: unknown;
+    /* Onde a janelinha deve NASCER (o canto inferior direito da tela da ABA): quem
+     * enxerga o `screen` é o content script — o service worker não tem essa API. A
+     * posição GUARDADA (onde você a arrastou da última vez) tem prioridade. */
+    posicao?: { left?: unknown; top?: unknown };
   }
 
   /** O que o worker manda para a aba do LinkedIn (o content script escuta). */
@@ -292,6 +296,16 @@ importScripts('shared.js');
       posicao = null;
     }
 
+    /* Sem posição guardada, vale a que a ABA mandou (ela enxerga o `screen`): a
+     * janela já NASCE no canto inferior direito, sem passar pelo meio da tela. */
+    if (!posicao && dados.posicao) {
+      const sugerida = dados.posicao;
+
+      if (Number.isFinite(sugerida.left) && Number.isFinite(sugerida.top)) {
+        posicao = { left: Number(sugerida.left), top: Number(sugerida.top) };
+      }
+    }
+
     /* A janela PEDIDA é a `popup`: sem barra de endereço, sem abas, sem menu —
      * só a barra de título e a borda do sistema, o mais capado que o Chrome
      * oferece. Tentamos na ordem do mais "capado" para o menos:
@@ -303,12 +317,36 @@ importScripts('shared.js');
      * O que falhou fica em `recusa` e volta na resposta (`{ ok: true, recusa }`):
      * é o que permite ver no console POR QUE a `popup` não saiu, sem adivinhar. */
     const tentativas: chrome.windows.CreateData[] = [
-      Object.assign({ url: url, type: 'popup', width: 372, height: 470, focused: true }, posicao || {}),
       Object.assign(
-        { url: url, type: 'popup', width: 372, height: 470, focused: true, setSelfAsOpener: true },
+        {
+          url: url,
+          type: 'popup',
+          width: SHARED.JANELINHA.largura,
+          height: SHARED.JANELINHA.altura,
+          focused: true,
+        },
         posicao || {}
       ),
-      Object.assign({ url: url, width: 372, height: 470, focused: true }, posicao || {}),
+      Object.assign(
+        {
+          url: url,
+          type: 'popup',
+          width: SHARED.JANELINHA.largura,
+          height: SHARED.JANELINHA.altura,
+          focused: true,
+          setSelfAsOpener: true,
+        },
+        posicao || {}
+      ),
+      Object.assign(
+        {
+          url: url,
+          width: SHARED.JANELINHA.largura,
+          height: SHARED.JANELINHA.altura,
+          focused: true,
+        },
+        posicao || {}
+      ),
     ];
 
     let janela: chrome.windows.Window | undefined;

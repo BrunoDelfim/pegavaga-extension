@@ -3342,6 +3342,28 @@
    *   - `acao: ''`         → ninguém respondeu a tempo (prazo/aborto) — quem
    *                          chamou decide.
    */
+  /**
+   * Onde a janelinha deve NASCER: o canto inferior direito da tela desta aba.
+   *
+   * Quem enxerga o `screen` é a aba (o service worker não tem essa API) — mandando
+   * a posição no pedido, a janela já nasce no lugar certo, sem o pulo do meio da
+   * tela. Se o `chaveiro` da janelinha tiver uma posição guardada (onde você a
+   * arrastou da última vez), ela tem prioridade lá no worker.
+   */
+  function posicaoDaJanelinha() {
+    try {
+      const margem = 16;
+      const tamanho = (SHARED && SHARED.JANELINHA) || { largura: 372, altura: 470 };
+
+      return {
+        left: Math.round(screen.availLeft + screen.availWidth - tamanho.largura - margem),
+        top: Math.round(screen.availTop + screen.availHeight - tamanho.altura - margem),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
   async function pedirAjuda(dados) {
     // Já há um pedido aberto (janelinha na tela): não empilha outro. Quem
     // decide é você, não a fila — a vaga atual espera a sua decisão.
@@ -3373,6 +3395,7 @@
           titulo: dados && dados.titulo,
           empresa: dados && dados.empresa,
           campos: dados && dados.campos, // { rotulo, tipo, opcoes } — a janelinha desenha a partir deles
+          posicao: posicaoDaJanelinha(), // onde ela deve NASCER (o worker não tem `screen`)
         })
         .catch((erro) => {
           erroDeEnvio = erro;

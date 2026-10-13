@@ -192,13 +192,29 @@ da build).
 - **A janelinha virou um popup de verdade**: **largura fixa** (372) e **altura que
   acompanha o conteúdo** — um campo só deixa a janela baixinha (o mínimo é um campo
   mais as margens), vários a esticam até o teto (o tamanho de antes); passando do
-  teto, quem rola é o corpo do cartão (`ajustarAltura`). Sem cantos arredondados nem
-  sombra: a moldura agora é a da janela. E ela abre **já na posição guardada** — o
-  worker lê `pegavaga_ajuda_pos` antes de criar a janela (o service worker não tem
-  `screen`, então o canto inferior direito da primeira vez continua sendo do
-  `ajuda.js`, que também arrasta e memoriza). O que o Chrome **não** oferece é
-  "sempre acima das outras" (é do gerenciador de janelas): o mais perto é abrir com
-  foco e atenção, mais o aviso do desktop, que aparece por cima de tudo.
+  teto, quem rola é o corpo do cartão (`ajustarAltura`). A altura não é "o tamanho
+  do container interno": a janela acaba **5px abaixo do último elemento** (a margem
+  é parte da conta). E os **botões nunca são cortados** — o cartão preenche a janela
+  e é o flex do CSS que garante a fileira de botões na última linha visível (`o corpo
+  encolhe e rola`, não há `max-height` para dar errado). Os números da janela
+  (largura e altura/teto) moram num só lugar (`JANELINHA`, no `shared.js`): o worker
+  que a cria, a aba que diz onde ela nasce e o `ajuda.js` que a redimensiona leem
+  dali. Sem cantos arredondados nem sombra: a moldura agora é a da janela. E ela abre
+  **já na posição guardada**: o worker lê `pegavaga_ajuda_pos` primeiro (onde você
+  deixou da última vez), depois a posição que a ABA mandou na mensagem (o service
+  worker não tem `screen`; a aba manda o canto inferior direito calculado com a altura
+  final) e, sem nenhuma das duas, quem posiciona é o `ajuda.js` — que também arrasta
+  e memoriza. O que o Chrome **não** oferece é "sempre acima das outras" (é do
+  gerenciador de janelas): o mais perto é abrir com foco e atenção, mais o aviso do
+  desktop, que aparece por cima de tudo.
+
+- **Testes da janelinha presos à REGRA, não ao número**: o harness passou a simular o
+  redimensionamento de verdade (a página segue a altura da janela, como no Chrome) e
+  a janelinha ganhou três cenários — primeira abertura (canto inferior direito),
+  posição memorizada e **muitos campos** (teto + corpo rolando + botões à vista) —
+  mais o teste do worker conferindo o tamanho compartilhado e a ordem de preferência
+  da posição. Foi assim que o "botão cortado" apareceu e foi corrigido: o teste mede
+  `5px` de margem e "nenhum botão fora da janela", em vez de um 470 fixo.
 
 - **O administrador já entra Premium** — o plano dele passou a vir do PAPEL, como já
   vinha o painel: quem administra precisa poder usar o que administra, e exigir

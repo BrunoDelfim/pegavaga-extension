@@ -44,11 +44,37 @@ const dados = {
   ],
 };
 
-/* Dois cenários, porque a janela é a mesma e o que muda é o que está guardado:
+/* Três cenários, porque a janela é a mesma e o que muda é o que está guardado:
  *   1. primeira abertura (sem posição): tem de ir para o canto inferior direito;
- *   2. com posição memorizada: tem de abrir ONDE você a deixou. */
-for (const guardada of [null, { left: 40, top: 60 }]) {
-  const contexto = Object.assign({}, dados, guardada ? { pegavaga_ajuda_pos: guardada } : {});
+ *   2. com posição memorizada: tem de abrir ONDE você a deixou;
+ *   3. com MUITOS campos (mais do que cabe na tela): a janela para no teto, o corpo
+ *      rola e os botões continuam à vista (o caso do "botão cortado"). */
+const muitos = [];
+for (let i = 0; i < 12; i += 1) {
+  muitos.push({
+    rotulo: 'Pergunta ' + (i + 1) + ' da etapa?',
+    tipo: 'texto',
+    opcoes: [],
+    valor: '',
+  });
+}
+
+const cenarios = [
+  { nome: 'primeira abertura', extra: {}, script: 'tests/dom-janelinha.js' },
+  {
+    nome: 'com posicao guardada',
+    extra: { pegavaga_ajuda_pos: { left: 40, top: 60 } },
+    script: 'tests/dom-janelinha.js',
+  },
+  {
+    nome: 'com muitos campos (teto)',
+    extra: { campos: muitos },
+    script: 'tests/dom-janelinha-teto.js',
+  },
+];
+
+for (const cenario of cenarios) {
+  const contexto = Object.assign({}, dados, cenario.extra);
 
   C.montarPagina({
     arquivoHtml: 'ajuda.html',
@@ -56,14 +82,14 @@ for (const guardada of [null, { left: 40, top: 60 }]) {
     // `dados` é o STORAGE do teste (o harness); o `query` é o contexto que a
     // própria janelinha lê da URL. A posição guardada vive no storage.
     dados: contexto,
-    scripts: ['tests/dom-janelinha.js'],
+    scripts: [cenario.script],
   });
 
   const dom = C.rodar(30000);
 
   if (!dom) C.pular();
 
-  console.log('== janelinha ' + (guardada ? 'com posicao guardada' : 'primeira abertura') + ' ==');
+  console.log('== janelinha ' + cenario.nome + ' ==');
   C.reportar(dom);
   C.mostrarLogs(dom);
 }

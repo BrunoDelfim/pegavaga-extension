@@ -14,6 +14,7 @@
     html, body {
       margin: 0;
       padding: 0;
+      height: 100%; /* a altura da página é a da JANELA: o cartão pode preenchê-la */
       background: #fff; /* qualquer folga da janela parece parte do cartão */
       color-scheme: light; /* o modo escuro do Chrome não pinta os campos de escuro */
     }
@@ -24,13 +25,16 @@
       -webkit-user-select: none;
       user-select: none;
     }
-    /* A moldura é da JANELA (barra de título + borda); o cartão só ocupa o que
-     * precisa. A altura da janela acompanha o conteúdo (ver `ajustarAltura` no
-     * ajuda.js): poucos campos = janela baixinha; muitos = até o teto, e aí quem
-     * rola é o corpo. */
+    /* A moldura é da JANELA (barra de título + borda); o cartão PREENCHE a janela e
+     * reserva a margem de baixo dela. Como a fileira de botões é a última linha do
+     * flex, ela nunca sai de vista: o que sobra de espaço fica no corpo (que rola
+     * quando o conteúdo não cabe). Ver `ajustarAltura` no ajuda.js. */
     #cartao {
       display: flex;
       flex-direction: column;
+      box-sizing: border-box; /* a margem de baixo faz parte dos 100% da janela */
+      height: 100%;
+      padding-bottom: 5px; /* a margem de baixo da janela (a mesma de ajustarAltura) */
     }
     .cabeca {
       display: flex;
@@ -52,7 +56,9 @@
       cursor: pointer;
       padding: 0 2px;
     }
-    .corpo { padding: 12px; overflow-y: auto; } /* o max-height vem do ajuda.js */
+    /* O corpo leva o espaço que sobra e ROLA quando os campos não cabem: é ele que
+     * segura o crescimento, nunca os botões. */
+    .corpo { flex: 1 1 auto; min-height: 0; padding: 12px; overflow-y: auto; }
     .vaga {
       margin: 0 0 8px;
       font-size: 12px;
@@ -85,7 +91,7 @@
       -webkit-user-select: text;
       user-select: text;
     }
-    .acoes { display: flex; gap: 8px; padding: 0 12px 12px; }
+    .acoes { display: flex; gap: 8px; padding: 0 12px; } /* a margem de baixo é da janela (ver ajustarAltura) */
     .acoes button {
       flex: 1;
       padding: 9px;

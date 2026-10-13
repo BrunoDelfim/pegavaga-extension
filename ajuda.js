@@ -66,10 +66,17 @@
 
   /* A janela: LARGURA fixa e ALTURA que acompanha o conteúdo — um campo só deixa a
    * janela baixinha (o mínimo é um campo mais as margens), vários a esticam até o
-   * teto; passando do teto, quem rola é o corpo do cartão. Os números batem com os
-   * do `windows.create` no background. */
+   * teto; passando do teto, quem rola é o corpo do cartão. Os números vêm do shared,
+   * os mesmos que o worker usa para criar a janela. */
+  const MEDIDAS = (globalThis.PegaVagaShared && globalThis.PegaVagaShared.JANELINHA) || {
+    largura: 372,
+    altura: 470,
+  };
   const ALTURA_MIN = 176;
-  const ALTURA_MAX = 470;
+  const ALTURA_MAX = MEDIDAS.altura;
+  /* A janela acaba esta distância ABAIXO do último elemento do cartão: a altura não
+   * é "o tamanho do container", é onde o conteúdo termina mais a margem. */
+  const MARGEM_INFERIOR = 5;
   let alturaAtual = 0;
   let janelaAtual = null;
 
@@ -90,9 +97,10 @@
   /**
    * Deixa a janela do tamanho do conteúdo.
    *
-   * Mede o que a PÁGINA ocupa (o cartão já está com o `max-height` do corpo
-   * aplicado, então o que passa do teto não conta) e soma a moldura da janela —
-   * barra de título e borda, que só existem para fora da página.
+   * A moldura da janela (barra de título + borda) NÃO é adivinhada: pedimos o
+   * tamanho, medimos o espaço que a PÁGINA ficou e corrigimos a diferença — em
+   * passos curtos, até casar. Era isso que dava "cortou os botões" (quando a
+   * moldura foi medida a menos) e "sobrou espaço embaixo" (medida a mais).
    */
   async function ajustarAltura() {
     if (!chrome.windows || typeof chrome.windows.update !== 'function') {
@@ -103,28 +111,54 @@
     }
 
     const cartao = document.getElementById('cartao');
-    const corpo = document.querySelector('.corpo');
-    if (!cartao || !corpo) return;
+    const corpo = cartao && cartao.querySelector('.corpo');
+    const cabeca = cartao && cartao.querySelector('.cabeca');
+    const acoes = cartao && cartao.querySelector('.acoes');
+    if (!cartao || !corpo || !cabeca || !acoes) return;
 
     const id = await acharJanela();
     if (id == null) return;
 
-    const moldura = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
-    const fora = Math.ceil(cartao.getBoundingClientRect().height - corpo.getBoundingClientRect().height);
-    const tetoDoCorpo = Math.max(60, ALTURA_MAX - moldura - fora);
+    const respirar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    corpo.style.maxHeight = tetoDoCorpo + 'px';
+    for (let tentativa = 0; tentativa < 4; tentativa += 1) {
+      /* O tamanho NATURAL do conteúdo: o corpo sai do flex só na hora da medida
+       * (senão ele estica ou corta e a conta sai errada), e a isso soma-se a margem
+       * de baixo — a janela acaba MARGEM abaixo do último elemento, não no tamanho
+       * do container. Quem garante que os botões nunca são cortados é o flex do CSS
+       * (o corpo encolhe e rola), não esta medida. */
+      const flexDoCorpo = corpo.style.flex;
+      corpo.style.flex = '0 0 auto';
 
-    const conteudo = Math.ceil(cartao.getBoundingClientRect().height);
-    const altura = Math.max(ALTURA_MIN, Math.min(ALTURA_MAX, conteudo + moldura));
+      const natural = Math.ceil(cabeca.offsetHeight + corpo.offsetHeight + acoes.offsetHeight);
 
-    if (altura === alturaAtual) return;
-    alturaAtual = altura;
+      corpo.style.flex = flexDoCorpo;
 
-    try {
-      await chrome.windows.update(id, { height: altura });
-    } catch (error) {
-      /* o sistema pode recusar redimensionar: o corpo rola dentro da janela que veio */
+      const moldura = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+      const alvo = Math.max(ALTURA_MIN, Math.min(ALTURA_MAX, natural + MARGEM_INFERIOR));
+
+      if (Math.abs(window.innerHeight - alvo) <= 2) {
+        alturaAtual = alvo;
+        return; // a página já tem exatamente o espaço do conteúdo (+ margem)
+      }
+
+      const janela = await chrome.windows.get(id).catch(() => null);
+      const alturaDaJanela = janela && janela.height != null ? janela.height : window.innerHeight;
+      const pedido = Math.max(
+        ALTURA_MIN,
+        Math.min(ALTURA_MAX, Math.round(alturaDaJanela + (alvo - window.innerHeight)))
+      );
+
+      if (pedido === alturaAtual) return; // sem mudança: não fica batendo na janela
+      alturaAtual = pedido;
+
+      try {
+        await chrome.windows.update(id, { height: pedido });
+      } catch (error) {
+        return; // o sistema recusou redimensionar: o corpo rola dentro do que veio
+      }
+
+      await respirar(90);
     }
   }
 
@@ -170,8 +204,8 @@
     }
     if (!janela || janela.id == null) return;
 
-    const largura = janela.width || window.outerWidth || 372;
-    const altura = janela.height || window.outerHeight || 470;
+    const largura = janela.width || window.outerWidth || MEDIDAS.largura;
+    const altura = janela.height || window.outerHeight || MEDIDAS.altura;
     const guardada = await lerPosicao();
 
     let left;
@@ -369,15 +403,8 @@
         'Não consegui ler o campo travado. Assuma à mão ou pule esta vaga.';
     }
 
-    /* Altura PRIMEIRO (a janela cresce/encolhe com o conteúdo) e só depois a
-     * posição: o canto inferior direito é calculado com a altura final, senão a
-     * janela baixinha ficaria flutuando no meio da tela. */
-    await ajustarAltura();
-    await posicionar();
-    permitirArrastar();
-    await trazerParaFrente();
-
-    /* Botões. */
+    /* Botões e foco PRIMEIRO: o cartão responde na hora. A moldura da janela
+     * (tamanho e posição) vem depois — ela pode levar alguns passos até casar. */
     const lerResposta = () => {
       const resposta = {};
       controles.forEach((c) => {
@@ -406,6 +433,14 @@
     });
 
     if (controles.length && controles[0].el) controles[0].el.focus();
+
+    /* A moldura da janela: altura (o conteúdo + a margem) e depois a posição — o
+     * canto inferior direito é calculado com a altura FINAL, senão a janela
+     * baixinha ficaria flutuando no meio da tela. */
+    await ajustarAltura();
+    await posicionar();
+    permitirArrastar();
+    await trazerParaFrente();
 
     /* Segunda passada do tamanho/posição, no FIM (os botões já estão ligados): alguns
      * gerenciadores de janelas reposicionam uma janela nova DEPOIS de ela aparecer

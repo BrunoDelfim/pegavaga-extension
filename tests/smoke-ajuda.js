@@ -276,6 +276,52 @@ async function principal() {
 
   ok('nenhuma janela extra nas recusas', janelasCriadas.length === 1, janelasCriadas.length);
 
+  /* O TAMANHO vem do shared (o mesmo número que o ajuda.js usa para a altura) e a
+   * POSIÇÃO de abertura tem ordem de preferência: a guardada (onde você deixou a
+   * janelinha da última vez) ganha da que a aba mandou; sem guardada, vale a da aba
+   * (ela enxerga o `screen`, o worker não). */
+  ok(
+    'nasce com o tamanho da janelinha (o mesmo número do ajuda.js)',
+    janelasCriadas[0] &&
+      janelasCriadas[0].opcoes.width === S.JANELINHA.largura &&
+      janelasCriadas[0].opcoes.height === S.JANELINHA.altura,
+    janelasCriadas[0] && janelasCriadas[0].opcoes.width + 'x' + janelasCriadas[0].opcoes.height
+  );
+
+  armazem.set(S.STORAGE.pos, { left: 40, top: 60 });
+
+  const comPosicaoGuardada = await falarComOWorker(
+    { type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p5', posicao: { left: 900, top: 700 } },
+    { tab: { id: 45 } }
+  );
+
+  ok(
+    'a posicao GUARDADA ganha da que a aba mandou',
+    comPosicaoGuardada &&
+      comPosicaoGuardada.ok === true &&
+      janelasCriadas[1] &&
+      janelasCriadas[1].opcoes.left === 40 &&
+      janelasCriadas[1].opcoes.top === 60,
+    JSON.stringify(janelasCriadas[1] && janelasCriadas[1].opcoes)
+  );
+
+  armazem.delete(S.STORAGE.pos);
+
+  const comPosicaoDaAba = await falarComOWorker(
+    { type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p6', posicao: { left: 900, top: 700 } },
+    { tab: { id: 46 } }
+  );
+
+  ok(
+    'sem posicao guardada, nasce onde a aba disse (a janela ja nasce no canto)',
+    comPosicaoDaAba &&
+      comPosicaoDaAba.ok === true &&
+      janelasCriadas[2] &&
+      janelasCriadas[2].opcoes.left === 900 &&
+      janelasCriadas[2].opcoes.top === 700,
+    JSON.stringify(janelasCriadas[2] && janelasCriadas[2].opcoes)
+  );
+
   /* A janela é pedida como `popup` (só barra de título + borda do sistema). Se a
    * plataforma recusar o tipo, o worker tenta de novo — e CONTA a recusa, para a
    * moldura errada não passar em silêncio. */

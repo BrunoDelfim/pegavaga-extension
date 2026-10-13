@@ -99,11 +99,46 @@ const CHROME_FALSO = `
 
   /* A janela da extensão (uma só): o estado e o histórico de atualizações. É o que
    * permite conferir, no teste, onde a janelinha se posicionou e de que tamanho
-   * ficou. */
+   * ficou. O outerHeight/innerHeight da PÁGINA passam a seguir essa janela (com
+   * a moldura de 24px): é assim que o teste enxerga o redimensionamento de verdade —
+   * no headless a página não muda de tamanho sozinha. */
   window.__pgvJanela = {
     janela: { id: 1, left: 0, top: 0, width: 372, height: 470 },
+    moldura: 24,
     atualizacoes: [],
   };
+
+  Object.defineProperty(window, 'outerHeight', {
+    configurable: true,
+    get: function () {
+      return window.__pgvJanela.janela.height;
+    },
+  });
+  Object.defineProperty(window, 'innerHeight', {
+    configurable: true,
+    get: function () {
+      return Math.max(0, window.__pgvJanela.janela.height - window.__pgvJanela.moldura);
+    },
+  });
+
+  /* Numa página da extensão que vive numa JANELA (a janelinha), a altura da PÁGINA
+   * segue a janela — é o que o Chrome faz de verdade. Sem isto, o CSS do cartão
+   * (que preenche a página) mediria a tela inteira do headless e o teste veria
+   * botões cortados que na vida real não acontecem. */
+  function fixarAlturaDaPagina() {
+    if (!window.__pgvJanelaDeVerdade || !document.documentElement || !document.body) return;
+
+    var px = Math.max(0, window.__pgvJanela.janela.height - window.__pgvJanela.moldura);
+
+    document.documentElement.style.height = px + 'px';
+    document.body.style.height = px + 'px';
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fixarAlturaDaPagina);
+  } else {
+    fixarAlturaDaPagina();
+  }
 
   window.chrome = {
     storage: {
@@ -169,6 +204,7 @@ const CHROME_FALSO = `
         var janela = Object.assign({}, window.__pgvJanela.janela, info || {}, { id: id });
         window.__pgvJanela.janela = janela;
         window.__pgvJanela.atualizacoes.push(info || {});
+        fixarAlturaDaPagina();
         if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
         return Promise.resolve(janela);
       }
@@ -321,7 +357,7 @@ function montarPagina(opcoes) {
 
   const dados = `<script>${
     opcoes.dados ? 'window.__pgvDados = ' + JSON.stringify(opcoes.dados) + ';' : ''
-  }</script>`;
+  }${opcoes.arquivoHtml ? 'window.__pgvJanelaDeVerdade = true;' : ''}</script>`;
 
   const html = opcoes.arquivoHtml
     ? fs
