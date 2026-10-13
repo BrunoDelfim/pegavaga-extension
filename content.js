@@ -2109,9 +2109,19 @@
     }
 
     if (type === 'radio') {
+      // O grupo pode estar fora do `modal` (portal/shadow DOM): o `radioGroup` já
+      // cai para o documento. As opções são o texto de cada bolinha ("Sim"/"Não")
+      // — sem elas o cartão vira campo de texto.
       const grupo = radioGroup(modal || document, campo);
-      const opcoes = grupo
-        .map((f) => fieldLabel(f) || String(f.value || ''))
+      const opcoes = grupo.map(rotuloDaOpcao).map((t) => clean(t)).filter(Boolean);
+      return { rotulo, tipo: 'radio', opcoes };
+    }
+
+    /* Rádio CUSTOM (`role="radio"`): o artdeco de hoje usa div/botões, não
+     * `<input type=radio>`. Sem as opções, o cartão cai no campo de texto. */
+    if (ehRadioCustom(campo)) {
+      const opcoes = opcoesDeRadioCustom(campo, modal)
+        .map(rotuloDaOpcao)
         .map((t) => clean(t))
         .filter(Boolean);
       return { rotulo, tipo: 'radio', opcoes };
@@ -2157,6 +2167,14 @@
     const type = String(el.type || '').toLowerCase();
 
     if (tag === 'select') return !selectVazio(el);
+
+    // Rádio custom (`role="radio"`): respondido = o grupo tem um marcado.
+    if (ehRadioCustom(el)) {
+      return opcoesDeRadioCustom(el, document).some(
+        (f) => String(f.getAttribute('aria-checked')) === 'true'
+      );
+    }
+
     if (type === 'radio') return radioGroup(document, el).some((f) => f.checked);
     if (type === 'checkbox') return el.checked;
     if (textoEhPlaceholderDeLista(el)) return false;
@@ -2311,11 +2329,16 @@
         // Varre tudo que pode pedir resposta no formulário — campos nativos e
         // controles customizados do LinkedIn (o dropdown é um `<select>`, um
         // `<button>` ou um `<input readonly>`, e nem sempre tem sinal de ARIA).
+        /* `visivelOuControle`, e não `isVisible`: o LinkedIn ESCONDE o controle
+         * nativo atrás do UI estilizado (o `<input type=radio>` e o `<select>` do
+         * artdeco ficam sem caixa). Exigir visibilidade era o que tirava o rádio da
+         * varredura — ele só sobrava para a rede de rótulo, que o reportava sem as
+         * opções (e aí o cartão virava campo de texto). */
         const campos = queryAllProfundo(
-          'input, select, textarea, [contenteditable="true"], ' +
+          'input, select, textarea, [contenteditable="true"], [role="radio"], ' +
             '[role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
           modal
-        ).filter(isVisible);
+        ).filter(visivelOuControle);
 
         let listboxVisto = false; // o dropdown é filho do botão: conta como um só
 
@@ -2379,6 +2402,23 @@
           }
 
           if (campo.disabled || campo.readOnly) continue;
+
+          /* Rádio CUSTOM (`role="radio"`): o artdeco de hoje usa div/botões, e o
+           * grupo tem de ser lido para a pergunta não ir SEM OPÇÃO (o cartão, sem
+           * opções, vira campo de texto). Só o primeiro do grupo representa a
+           * pergunta; um já marcado (`aria-checked`) é resposta dada. */
+          if (ehRadioCustom(campo)) {
+            if (String(campo.getAttribute('role') || '').toLowerCase() === 'radiogroup') {
+              continue; // o container do grupo: quem representa são os filhos
+            }
+
+            const grupo = opcoesDeRadioCustom(campo, modal);
+            if (grupo.length && grupo[0] !== campo) continue;
+            if (grupo.some((f) => String(f.getAttribute('aria-checked')) === 'true')) continue;
+
+            anotar(campo);
+            continue;
+          }
 
           if (type === 'radio') {
             // Só o primeiro do grupo representa a pergunta; um já marcado é
@@ -2466,44 +2506,98 @@
     /* Diagnóstico barato e útil: o que foi reconhecido nesta etapa. Quando um
      * campo não aparece no cartão, é esta linha que diz se ele nem foi achado ou
      * se foi achado com o tipo errado. */
+    // String (e não objeto): é o log que se copia para o relato de um campo que
+    // não entrou no cartão.
     console.log(
-      '[PegaVaga] campos reconhecidos nesta etapa:',
-      encontrados.map((c) => ({
-        rotulo: c.rotulo,
-        tipo: c.tipo,
-        opcoes: (c.opcoes || []).length,
-        tag: (c._campo && c._campo.tagName) || '?',
-      }))
+      '[PegaVaga] campos reconhecidos nesta etapa: ' +
+        encontrados
+          .map(
+            (c, i) =>
+              '[' +
+              (i + 1) +
+              '] tipo=' +
+              c.tipo +
+              ' opcoes=' +
+              (c.opcoes || []).length +
+              (c.opcoes && c.opcoes.length ? '(' + c.opcoes.slice(0, 3).join('/') + ')' : '') +
+              ' tag=' +
+              ((c._campo && c._campo.tagName) || '?') +
+              ' "' +
+              String(c.rotulo || '').slice(0, 50) +
+              '"'
+          )
+          .join(' | ')
     );
 
-    /* Auditoria da etapa — só diagnóstico: o que a varredura VÊ (blocos, perguntas
-     * e os controles de cada uma), quantos campos de cada tipo e quantos hosts de
-     * Shadow DOM. Quando um campo não entra no cartão, é esta linha que diz o que
-     * ele é na página. */
+    /* Auditoria da etapa — só diagnóstico, e numa STRING (fácil de copiar): para
+     * cada bloco de pergunta, o texto e os CONTROLES de dentro (tag, type, role,
+     * `aria-checked`). É esta linha que diz o que é um campo que não entrou no
+     * cartão. */
     try {
       const blocos = queryAllProfundo(
         '.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset',
         modal
       );
 
-      console.log('[PegaVaga] auditoria da etapa:', {
-        blocos: blocos.length,
-        perguntas: blocos.slice(0, 12).map((b) => ({
-          texto: clean(b.textContent).slice(0, 50),
-          controles: queryAllProfundo('input, select, textarea, [role], button, [contenteditable]', b)
-            .map((el) => {
-              const tag = String(el.tagName || '?').toLowerCase();
-              const role = el.getAttribute && el.getAttribute('role');
-              const tipo = el.getAttribute && el.getAttribute('type');
-              return tag + (tipo ? ':' + tipo : '') + (role ? '[' + role + ']' : '');
-            })
-            .slice(0, 8),
-        })),
-        inputs: queryAllProfundo('input', modal).length,
-        selects: queryAllProfundo('select', modal).length,
-        combos: queryAllProfundo('[role="combobox"], [aria-haspopup], [aria-expanded]', modal).length,
-        shadowHosts: queryAllProfundo('*', modal).filter((el) => el.shadowRoot).length,
+      const descreverControle = (el) => {
+        const tag = String(el.tagName || '?').toLowerCase();
+        const tipo = (el.getAttribute && el.getAttribute('type')) || '';
+        const role = (el.getAttribute && el.getAttribute('role')) || '';
+        const marcado = (el.getAttribute && el.getAttribute('aria-checked')) || '';
+        return (
+          tag +
+          (tipo ? ':' + tipo : '') +
+          (role ? '[' + role + ']' : '') +
+          (marcado ? '(checked=' + marcado + ')' : '')
+        );
+      };
+
+      const linhas = blocos.slice(0, 12).map((bloco, indice) => {
+        const controles = queryAllProfundo(
+          'input, select, textarea, [role], button, [contenteditable]',
+          bloco
+        )
+          .map(descreverControle)
+          .slice(0, 8)
+          .join(', ');
+
+        // O que conseguimos LER de cada opção de rádio/checkbox — é o texto que o
+        // cartão mostra. Sem isso não dá para saber se o problema é achar a opção
+        // ou ler o rótulo dela.
+        const opcoesLidas = queryAllProfundo('input[type="radio"], input[type="checkbox"], [role="radio"]', bloco)
+          .map((el) => rotuloDaOpcao(el) || '(sem rotulo)')
+          .slice(0, 4)
+          .join(' / ');
+
+        return (
+          '[' +
+          (indice + 1) +
+          '] "' +
+          clean(bloco.textContent).slice(0, 40) +
+          '" -> ' +
+          (controles || '(sem controles)') +
+          (opcoesLidas ? ' | opcoes: ' + opcoesLidas : '')
+        );
       });
+
+      console.log(
+        '[PegaVaga] auditoria da etapa: ' +
+          blocos.length +
+          ' bloco(s) | inputs=' +
+          queryAllProfundo('input', modal).length +
+          ' selects=' +
+          queryAllProfundo('select', modal).length +
+          ' radio(role)=' +
+          queryAllProfundo('[role="radio"]', modal).length +
+          ' radio(input)=' +
+          queryAllProfundo('input[type="radio"]', modal).length +
+          ' combos=' +
+          queryAllProfundo('[role="combobox"], [aria-haspopup], [aria-expanded]', modal).length +
+          ' shadowHosts=' +
+          queryAllProfundo('*', modal).filter((el) => el.shadowRoot).length +
+          '\n' +
+          linhas.join('\n')
+      );
     } catch (erro) {
       /* auditoria é só diagnóstico: se falhar, o pedido segue igual */
     }
@@ -2566,7 +2660,7 @@
        * Preferimos o controle que está SEM resposta (`jaRespondido`), porque um
        * bloco pode conter mais de um. */
       const candidatos = queryAllProfundo(
-        'select, input:not([type="hidden"]), textarea, [role="combobox"], ' +
+        'select, input:not([type="hidden"]), textarea, [role="radio"], [role="combobox"], ' +
           '[aria-haspopup], [aria-expanded], input[readonly]',
         bloco
       ).filter((el) => !jaRespondido(el));
@@ -3450,15 +3544,21 @@
           // ignora). O `fireFieldEvents` conta a escolha como preenchimento.
           const aplicado = await aplicarEmCombo(modal, campo, valor, alvoOpcao);
           if (aplicado) aplicados += 1;
-        } else if (type === 'radio') {
-          // Grupo de rádios: marca o que tem o rótulo da opção escolhida.
-          const grupo = radioGroup(modal, campo);
+        } else if (type === 'radio' || ehRadioCustom(campo)) {
+          // Grupo de rádios (input NATIVO ou `role="radio"`): marca o que tem o
+          // rótulo da OPÇÃO escolhida — o mesmo texto que o cartão mostrou (ver
+          // `rotuloDaOpcao`), para casar com o que você respondeu.
+          const grupo = ehRadioCustom(campo)
+            ? opcoesDeRadioCustom(campo, modal)
+            : radioGroup(modal, campo);
+
           const alvo =
-            grupo.find((f) => normalizar(fieldLabel(f) || f.value) === alvoOpcao) ||
-            grupo.find((f) => normalizar(fieldLabel(f) || f.value).indexOf(alvoOpcao) >= 0);
+            grupo.find((f) => normalizar(rotuloDaOpcao(f)) === alvoOpcao) ||
+            grupo.find((f) => normalizar(rotuloDaOpcao(f)).indexOf(alvoOpcao) >= 0);
+
           if (alvo) {
             const clicavel = (alvo.labels && alvo.labels[0]) || alvo;
-            clicavel.click();
+            humanClick(clicavel);
             aplicados += 1;
           }
         } else if (type === 'checkbox') {
@@ -3570,17 +3670,113 @@
     field.value = value;
   }
 
-  /** Todos os rádios do mesmo grupo (nome), habilitados. */
-  function radioGroup(dialog, field) {
+  /**
+   * Todos os rádios do MESMO grupo (nome), habilitados.
+   *
+   * Procura no `root` (o modal) e, se não achar, no DOCUMENTO — e **entra nos
+   * Shadow DOMs** (`queryAllProfundo`). O formulário do Easy Apply é montado em
+   * pedaços (portais/web components), e um grupo não encontrado deixava a pergunta
+   * **sem opção nenhuma** — e o cartão, sem opções, vira campo de TEXTO. Era o
+   * radio que aparecia como input.
+   */
+  function radioGroup(root, field) {
+    if (!field) return [];
     if (!field.name) return [field];
 
+    let seletor = '';
     try {
-      const selector =
-        'input[type="radio"][name="' + String(field.name).replace(/"/g, '\\"') + '"]';
-      return Array.from(dialog.querySelectorAll(selector)).filter((input) => !input.disabled);
+      seletor = 'input[type="radio"][name="' + String(field.name).replace(/"/g, '\\"') + '"]';
     } catch (error) {
       return [field];
     }
+
+    const achar = (base) => {
+      try {
+        return queryAllProfundo(seletor, base || document).filter((input) => !input.disabled);
+      } catch (error) {
+        return [];
+      }
+    };
+
+    let grupo = achar(root);
+    if (!grupo.length && root && root !== document) grupo = achar(document);
+
+    return grupo.length ? grupo : [field];
+  }
+
+  /** É um rádio/check CUSTOM (div/botão com `role`), e não um `<input>`? */
+  function ehRadioCustom(el) {
+    if (!el) return false;
+    const role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    return role === 'radio' || role === 'radiogroup';
+  }
+
+  /**
+   * As OPÇÕES de um grupo de rádio custom (`role="radio"`).
+   *
+   * O artdeco de hoje **não usa `<input type=radio>` em todas as telas**: são
+   * div/botões com `role="radio"` dentro de um `radiogroup`/`fieldset`. Como nada
+   * lia esse grupo, a pergunta ficava **sem opção** — e o cartão, sem opções, cai
+   * no campo de texto (era o radio que vinha como input).
+   */
+  function opcoesDeRadioCustom(el, modal) {
+    if (!el) return [];
+
+    const role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    const raiz =
+      role === 'radiogroup'
+        ? el
+        : (el.closest &&
+            el.closest(
+              '[role="radiogroup"], fieldset, .fb-dash-form-element, .jobs-easy-apply-form-element'
+            )) ||
+          el.parentElement ||
+          el;
+
+    return queryAllProfundo('[role="radio"]', raiz).filter(isVisible);
+  }
+
+  /**
+   * O rótulo da OPÇÃO de um rádio/checkbox — o texto ao lado da bolinha
+   * ("Sim"/"Não"), que NÃO é a pergunta. É ele que o cartão oferece.
+   */
+  function rotuloDaOpcao(input) {
+    if (!input) return '';
+
+    const tag = String(input.tagName || '').toLowerCase();
+    const ehInput = tag === 'input';
+
+    try {
+      if (ehInput && input.labels && input.labels.length) {
+        const texto = perguntaDoTexto(input.labels[0].textContent).slice(0, 80);
+        if (texto) return texto;
+      }
+
+      const aria = clean((input.getAttribute && input.getAttribute('aria-label')) || '');
+      if (aria) return aria.slice(0, 80);
+
+      // Div/botão com `role="radio"`: o texto da opção é o próprio conteúdo.
+      if (!ehInput) {
+        const proprio = clean(input.textContent || '');
+        if (proprio && proprio.length <= 80) return proprio;
+      }
+
+      // O texto mora num <label>/<span> dentro do bloco da opção (o
+      // `.artdeco-radio-button`, por exemplo) — nunca num `div`, que poderia ser o
+      // grupo inteiro.
+      const bloco = input.parentElement;
+      if (bloco) {
+        const perto = bloco.querySelector('label, span');
+        if (perto && perto !== input) {
+          const texto = clean(perto.textContent).slice(0, 80);
+          if (texto) return texto;
+        }
+      }
+    } catch (error) {
+      /* campo quebrado: cai no valor */
+    }
+
+    return String(input.value || '').slice(0, 80);
   }
 
   /** Responde um grupo de rádio obrigatório (devolve o rótulo escolhido). */
@@ -3588,7 +3784,9 @@
     if (!fields.length) return '';
     if (fields.some((field) => field.checked)) return '';
 
-    const labels = fields.map((field) => fieldLabel(field) || String(field.value || ''));
+    // O mesmo rótulo de opção que o cartão mostra (`rotuloDaOpcao`): é ele que
+    // casa com a resposta escolhida e com o "respondo sozinho".
+    const labels = fields.map((field) => rotuloDaOpcao(field) || String(field.value || ''));
     const choice = SHARED.pickChoice(labels, Object.assign({}, prefs, { question }));
     const index = labels.indexOf(choice);
     const field = fields[index >= 0 ? index : 0];
@@ -4412,8 +4610,12 @@
   /**
    * Avança para o próximo termo da fila (ou encerra). O storage é a fonte da
    * verdade: se o pop-up removeu a fila (botão Parar), paramos aqui mesmo.
+   *
+   * `motivo` é o `stop` da varredura ('' = a lista acabou). É o que explica no
+   * console POR QUE a página vai ser recarregada: troca de termo, ou o cap do
+   * termo batido.
    */
-  async function advanceRun() {
+  async function advanceRun(motivo) {
     const run = await getRun();
 
     if (!run || run.running !== true) {
@@ -4426,10 +4628,25 @@
     const nextIndex = (run.index || 0) + 1;
 
     if (nextIndex >= urls.length) {
+      console.log(
+        '[PegaVaga] fila encerrada (' +
+          (motivo ? 'motivo: ' + motivo : 'fim da lista') +
+          '): nao ha proximo termo.'
+      );
       await clearRun();
       broadcastProgress();
       return;
     }
+
+    console.log(
+      '[PegaVaga] termo encerrado (' +
+        (motivo ? 'motivo: ' + motivo : 'fim da lista') +
+        '): indo para o termo ' +
+        (nextIndex + 1) +
+        '/' +
+        urls.length +
+        '.'
+    );
 
     const nextRun = Object.assign({}, run, {
       index: nextIndex,
@@ -4447,8 +4664,10 @@
     const nextUrl = urls[nextIndex];
 
     if (nextUrl && nextUrl !== location.href) {
+      console.log('[PegaVaga] recarregando a pagina para o proximo termo:', nextUrl);
       location.assign(nextUrl); // recarrega a página; a fila é retomada no load
     } else {
+      console.log('[PegaVaga] mesmo termo/URL: recomecando a varredura por aqui.');
       startScan(); // mesma URL: apenas recomeça a varredura por aqui
     }
   }
@@ -4800,7 +5019,36 @@
         }
 
         const progressed = await scrollList();
-        if (!progressed) break; // nada novo carregou: fim da lista
+
+        if (!progressed) {
+          /* Fim da lista — mas com CARÊNCIA.
+           *
+           * Depois de uma candidatura o LinkedIn REMONTA o painel: a lista fica
+           * vazia por um instante e/ou o container de rolagem troca, e a rolagem
+           * falha sem que o termo tenha acabado. Era assim que a varredura
+           * encerrava o termo cedo e NAVEGAVA para o próximo — a página recarregava
+           * logo depois de você enviar os dados no cartão.
+           *
+           * Então, antes de encerrar: esperamos a lista existir e tentamos rolar de
+           * novo. Só encerra se falhar DE NOVO. */
+          const temLista = getCards().length
+            ? true
+            : Boolean(await waitForList(CONFIG.waitListTimeoutMs));
+
+          if (!temLista) {
+            console.log(
+              '[PegaVaga] a lista sumiu (o LinkedIn remonta o painel apos a candidatura) e nao voltou: fim do termo.'
+            );
+            break;
+          }
+
+          console.log(
+            '[PegaVaga] a rolagem nao trouxe nada novo; vou tentar mais uma vez antes de encerrar o termo.'
+          );
+          const insistiu = await scrollList();
+          if (!insistiu) break; // aí sim: fim da lista
+        }
+
         round += 1;
       }
     } finally {
@@ -4824,7 +5072,7 @@
         } else if (stop === 'usuario') {
           await pauseRunUntil(Date.now() + CONFIG.userBusyPauseMs, 'usuario');
         } else {
-          await advanceRun();
+          await advanceRun(stop);
         }
       } else if (state.guardStopped) {
         // O LinkedIn sinalizou limite de uso: a fila fica pausada e volta só
@@ -4962,6 +5210,10 @@
   /* ------------------------------------------------------------------------ */
 
   async function init() {
+    // Diagnóstico: toda carga da página passa por aqui (é a prova de que a página
+    // recarregou — e com qual URL).
+    console.log('[PegaVaga] pagina carregada:', location.href);
+
     await loadState();
     state.settings = await getSettings();
     await loadApps();

@@ -236,6 +236,42 @@ da build).
 
 ### Corrigido
 
+- **O rádio CUSTOM (`role="radio"`) passou a ser lido** (`opcoesDeRadioCustom`): o
+  artdeco não usa `<input type=radio>` em todas as telas — as opções são
+  div/botões com `role="radio"` dentro de um `radiogroup`/`fieldset`. Nada lia
+  esse grupo, então a pergunta ia **sem opções** e o cartão (sem opções) virava
+  campo de texto. Agora o grupo é lido (entrando em Shadow DOM), o campo sai como
+  **rádio com as opções**, o "respondido" é `aria-checked` e a resposta é aplicada
+  **clicando a opção certa** (pelo mesmo texto que o cartão mostrou).
+- **Fechar a janelinha sem decidir agora avisa a aba** (`responderAjuda`): a
+  decisão VAZIA (o "×") era descartada pelo worker, e o content script continuava
+  esperando a resposta pelo prazo cheio (**5 minutos**) — a varredura ficava
+  parada, parecendo travada. Agora a decisão vazia volta para a aba na hora e o
+  fluxo segue o caminho de sempre.
+- **Diagnóstico afiado**: a auditoria da etapa agora sai numa **string** (fácil de
+  copiar), com o texto de cada bloco e os **controles** de dentro (tag, `type`,
+  `role`, `aria-checked`) mais as contagens de `input`/`select`/`radio`/`combos`;
+  e cada **carga de página** registra `[PegaVaga] pagina carregada: <url>` — é o
+  que prova se houve recarga e para QUAL URL.
+
+- **A pergunta de rádio chegava como campo de texto** (`radioGroup`/`rotuloDaOpcao`):
+  o `radioGroup` procurava o grupo só DENTRO do nó `modal` e sem entrar em Shadow
+  DOM — o grupo não era encontrado, a pergunta ficava **sem opção nenhuma** e o
+  cartão, sem opções, cai no campo de texto (era o "radio veio como text"). Agora
+  ele procura no modal e **cai para o documento**, entrando nos Shadow DOMs; e o
+  rótulo de cada OPÇÃO vem do `rotuloDaOpcao` (o texto ao lado da bolinha —
+  "Sim"/"Não" —, não a pergunta), usado também ao **aplicar a resposta** e no
+  "respondo sozinho" (os três casam pelo mesmo texto).
+- **O termo não é mais encerrado cedo depois de uma candidatura** (`startScan`):
+  o LinkedIn **remonta o painel** depois de candidatar, a lista fica vazia por um
+  instante e/ou o container de rolagem troca — a rolagem falhava e a varredura dava
+  a lista por encerrada, **navegando para o próximo termo** (recarregando a página)
+  logo depois do envio. Agora há **carência**: espera a lista existir e tenta rolar
+  de novo; só encerra o termo se falhar de novo.
+- **Logs de navegação**: `[PegaVaga] termo encerrado (motivo: …)`, `fila encerrada`
+  e `recarregando a pagina para o proximo termo`, mais os do agendador (recarga ao
+  reiniciar no 1º termo e ao cutucar a aba) — para saber qual caminho recarregou.
+
 - **A pergunta de lista não chega mais sem opções** (`camposPorPergunta`): a rede
   de segurança por rótulo montava o campo com `tipo`/`opcoes` FIXOS
   (`opcoes: []`) — e o cartão, **sem opção nenhuma, cai no campo de texto**, por

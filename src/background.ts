@@ -376,7 +376,14 @@ importScripts('shared.js');
 
     fecharJanela(ajudaId);
 
-    if (!alvo || !acao) return Promise.resolve(false);
+    if (!alvo) return Promise.resolve(false);
+
+    /* Ação VAZIA é o "fechei a janelinha sem decidir": ela TAMBÉM volta para a
+     * aba. Sem isso, fechar a janela não avisava ninguém — o content script
+     * continuava esperando a resposta pelo prazo cheio (5 minutos) e a varredura
+     * ficava parada, parecendo que a extensão travou. Com o aviso, ele segue o
+     * caminho de sempre na hora. */
+
 
     // "Vou preencher à mão": a aba vai para a frente ANTES de a decisão chegar
     // ao content script — você vai digitar nela agora. "Pular"/"Aplicar" não
@@ -744,6 +751,11 @@ importScripts('shared.js');
       if (tab && tab.id != null) {
         tabId = tab.id;
         if (tab.url === firstUrl) {
+          // A aba já está no primeiro termo: recarregar é como a fila recomeça
+          // do topo da lista.
+          console.log(
+            '[PegaVaga] agendador: recarregando a aba (ja estava no 1o termo) para comecar a varredura.'
+          );
           await chrome.tabs.reload(tabId);
         } else {
           await chrome.tabs.update(tabId, { url: firstUrl, active: focus });
@@ -775,6 +787,7 @@ importScripts('shared.js');
     if (delivered) return;
 
     if (run.tabId != null) {
+      console.log('[PegaVaga] agendador: a aba nao respondeu; recarregando para retomar a fila.');
       await chrome.tabs.reload(run.tabId).catch(() => {});
     }
   }

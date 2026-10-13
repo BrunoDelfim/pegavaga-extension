@@ -316,6 +316,31 @@ async function principal() {
   );
   ok('janela é fechada após a decisão', janelasFechadas.indexOf(JANELA_DO_CARTAO) >= 0);
 
+  /* Fechar a janelinha SEM decidir também avisa a aba: senão o content script
+   * continuava esperando o prazo cheio (5 min) e a varredura ficava parada —
+   * parecendo que a extensão travou. */
+  await falarComOWorker({ type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p5' }, { tab: { id: 42 } });
+  enviados.length = 0;
+
+  const fechou = await falarComOWorker({
+    type: S.MSG.AJUDA_RESPOSTA_JANELA,
+    avisoId: 'pegavaga-ajuda:42:p5',
+    acao: '',
+  });
+
+  ok('fechar a janelinha devolve ok', fechou && fechou.ok === true, JSON.stringify(fechou));
+  ok(
+    'e a decisão vazia chega na aba (a espera termina na hora)',
+    enviados.some(
+      (e) =>
+        e.tabId === 42 &&
+        e.mensagem.type === S.MSG.AJUDA_RESPOSTA &&
+        e.mensagem.pedidoId === 'p5' &&
+        e.mensagem.acao === ''
+    ),
+    JSON.stringify(enviados)
+  );
+
   /* "Vou preencher à mão": a aba da vaga vem para a frente ANTES da decisão. */
   await falarComOWorker(
     { type: S.MSG.AJUDA_PEDIDO, pedidoId: 'p2', motivo: 'campos' },
