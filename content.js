@@ -1842,6 +1842,18 @@
     };
 
     try {
+      /* 0) RÁDIO: o `<label>` e o `aria-label` do input são a OPÇÃO ("YES"/"NO"),
+       * não a pergunta — e era por isso que as perguntas de escolha chegavam ao
+       * cartão com o rótulo "YES". A pergunta vem do GRUPO. */
+      const ehRadio =
+        String(field.type || '').toLowerCase() === 'radio' ||
+        String((field.getAttribute && field.getAttribute('role')) || '').toLowerCase() === 'radio';
+
+      if (ehRadio && opcoesDoGrupo(field).length >= 2) {
+        const doGrupo = rotuloDaPerguntaDoGrupo(field);
+        if (doGrupo) return doGrupo;
+      }
+
       // 1) `aria-labelledby` aponta para o elemento com a pergunta.
       const ids = String(get('aria-labelledby')).split(/\s+/).filter(Boolean);
       for (const id of ids) {
@@ -2108,22 +2120,12 @@
       return { rotulo, tipo: 'select', opcoes };
     }
 
-    if (type === 'radio') {
-      // O grupo pode estar fora do `modal` (portal/shadow DOM): o `radioGroup` já
-      // cai para o documento. As opções são o texto de cada bolinha ("Sim"/"Não")
-      // — sem elas o cartão vira campo de texto.
-      const grupo = radioGroup(modal || document, campo);
+    /* Rádio (nativo ou `role="radio"`): as opções são o texto de CADA bolinha do
+     * GRUPO (`opcoesDoGrupo` — todas as da mesma pergunta, mesmo sem `name`, que é o
+     * que fazia o cartão trazer uma opção só por bolinha). */
+    if (type === 'radio' || ehRadioCustom(campo)) {
+      const grupo = opcoesDoGrupo(campo);
       const opcoes = grupo.map(rotuloDaOpcao).map((t) => clean(t)).filter(Boolean);
-      return { rotulo, tipo: 'radio', opcoes };
-    }
-
-    /* Rádio CUSTOM (`role="radio"`): o artdeco de hoje usa div/botões, não
-     * `<input type=radio>`. Sem as opções, o cartão cai no campo de texto. */
-    if (ehRadioCustom(campo)) {
-      const opcoes = opcoesDeRadioCustom(campo, modal)
-        .map(rotuloDaOpcao)
-        .map((t) => clean(t))
-        .filter(Boolean);
       return { rotulo, tipo: 'radio', opcoes };
     }
 
@@ -2175,7 +2177,7 @@
       );
     }
 
-    if (type === 'radio') return radioGroup(document, el).some((f) => f.checked);
+    if (type === 'radio') return opcoesDoGrupo(el).some((f) => f.checked);
     if (type === 'checkbox') return el.checked;
     if (textoEhPlaceholderDeLista(el)) return false;
     if (el.getAttribute && el.getAttribute('contenteditable') === 'true') {
@@ -2421,10 +2423,13 @@
           }
 
           if (type === 'radio') {
-            // Só o primeiro do grupo representa a pergunta; um já marcado é
-            // resposta dada (não trava nada).
-            const grupo = radioGroup(modal, campo);
-            if (grupo.length && grupo[0] !== campo) continue;
+            /* Só o primeiro do grupo representa a pergunta; um já marcado é
+             * resposta dada (não trava nada). O grupo sai do `opcoesDoGrupo` — pelo
+             * `name` quando existe e, SEM ele, pelo ancestral que reúne 2+ opções:
+             * era o `name` ausente que fazia cada bolinha virar uma pergunta com
+             * uma opção só ("muito rádio com o rótulo YES"). */
+            const grupo = opcoesDoGrupo(campo);
+            if (grupo.length > 1 && grupo[0] !== campo) continue;
             if (grupo.some((f) => f.checked)) continue;
             anotar(campo);
             continue;
@@ -2544,10 +2549,19 @@
         const tipo = (el.getAttribute && el.getAttribute('type')) || '';
         const role = (el.getAttribute && el.getAttribute('role')) || '';
         const marcado = (el.getAttribute && el.getAttribute('aria-checked')) || '';
+        const nome = (el.getAttribute && el.getAttribute('name')) || '';
+        const valor = (el.getAttribute && el.getAttribute('value')) || '';
+        const aria = (el.getAttribute && el.getAttribute('aria-label')) || '';
+
         return (
           tag +
           (tipo ? ':' + tipo : '') +
           (role ? '[' + role + ']' : '') +
+          // `name`/`value`/`aria-label` das opções: é o que diz por que um rádio veio
+          // com uma opção só (ou com o rótulo da opção no lugar da pergunta).
+          (nome ? '[name=' + clean(nome).slice(0, 12) + ']' : '') +
+          (valor ? '[value=' + clean(valor).slice(0, 12) + ']' : '') +
+          (aria ? '[aria-label=' + clean(aria).slice(0, 20) + ']' : '') +
           (marcado ? '(checked=' + marcado + ')' : '')
         );
       };
@@ -2600,6 +2614,38 @@
       );
     } catch (erro) {
       /* auditoria é só diagnóstico: se falhar, o pedido segue igual */
+    }
+
+    /* Os GRUPOS de ESCOLHA como o fluxo os enxerga: a PERGUNTA lida e as OPÇÕES
+     * lidas de cada bolinha. É esta linha que responde "por que o rádio veio com o
+     * rótulo YES" (ou com uma opção só) sem precisar adivinhar. */
+    try {
+      const grupos = [];
+      const raizes = new Set();
+
+      for (const opcao of queryAllProfundo(OPCOES_SEL, modal)) {
+        const raiz = raizDoGrupo(opcao);
+        if (!raiz || raizes.has(raiz)) continue;
+        raizes.add(raiz);
+
+        grupos.push(
+          '"' +
+            clean(rotuloDaPerguntaDoGrupo(opcao)).slice(0, 40) +
+            '" -> ' +
+            (opcoesDoGrupo(opcao)
+              .map((o) => rotuloDaOpcao(o) || '(sem rotulo)')
+              .slice(0, 4)
+              .join(' / ') || '(sem opcoes)')
+        );
+
+        if (grupos.length >= 6) break;
+      }
+
+      if (grupos.length) {
+        console.log('[PegaVaga] grupos de escolha da etapa:\n' + grupos.join('\n'));
+      }
+    } catch (erro) {
+      /* diagnóstico: se falhar, o pedido segue igual */
     }
 
     return encontrados;
@@ -3689,7 +3735,7 @@
           // `rotuloDaOpcao`), para casar com o que você respondeu.
           const grupo = ehRadioCustom(campo)
             ? opcoesDeRadioCustom(campo, modal)
-            : radioGroup(modal, campo);
+            : opcoesDoGrupo(campo);
 
           const alvo =
             grupo.find((f) => normalizar(rotuloDaOpcao(f)) === alvoOpcao) ||
@@ -3698,7 +3744,23 @@
           if (alvo) {
             const clicavel = (alvo.labels && alvo.labels[0]) || alvo;
             humanClick(clicavel);
-            aplicados += 1;
+
+            // Marcou mesmo? (o LinkedIn remonta o grupo em alguns passos; e um
+            // `role="radio"` marca por `aria-checked`, não por `checked`.)
+            const marcado = (f) =>
+              f.checked === true ||
+              String((f.getAttribute && f.getAttribute('aria-checked')) || '') === 'true';
+
+            if (grupo.some(marcado)) {
+              aplicados += 1;
+            } else {
+              console.warn(
+                '[PegaVaga] o radio "' +
+                  rotulo +
+                  '" nao ficou marcado ' +
+                  diagnosticoDoCampo(alvo)
+              );
+            }
           }
         } else if (type === 'checkbox') {
           // Binário ("Sim"/"Não"): "Sim" marca; "Não" deixa como está (desmarcado).
@@ -3896,22 +3958,176 @@
     if (!el) return [];
 
     const role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
-    const raiz =
-      role === 'radiogroup'
-        ? el
-        : (el.closest &&
-            el.closest(
-              '[role="radiogroup"], fieldset, .fb-dash-form-element, .jobs-easy-apply-form-element'
-            )) ||
-          el.parentElement ||
-          el;
+    const raiz = role === 'radiogroup' ? el : raizDoGrupo(el);
 
-    return queryAllProfundo('[role="radio"]', raiz).filter(isVisible);
+    /* Sem filtro de visibilidade: o artdeco esconde o controle custom em algumas
+     * telas e deixa só o rótulo visível — filtrar aqui zerava as opções e a pergunta
+     * voltava ao cartão como campo de TEXTO. A raiz do grupo já é local (o ancestral
+     * com 2+ opções), então não há risco de puxar opção de outra pergunta. */
+    return queryAllProfundo('[role="radio"]', raiz);
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* Grupos de ESCOLHA (rádio/checkbox): o que é PERGUNTA e o que é OPÇÃO        */
+  /* -------------------------------------------------------------------------- */
+  //
+  // O artdeco marca cada bolinha de formas diferentes conforme a tela: `<input
+  // type=radio>`, `<input>` escondido com o `<label>` visível, ou div/botão com
+  // `role="radio"`. Em todas vale a mesma separação:
+  //
+  //   - a PERGUNTA vem do GRUPO (`<legend>`, `[role="radiogroup"]`, rótulo do bloco
+  //     do Easy Apply);
+  //   - a OPÇÃO é o `<label>` colado na bolinha ("YES"/"NO").
+  //
+  // Trocar os dois era o cartão trazendo "muito rádio com o rótulo YES": o
+  // `fieldLabel` do input devolvia o `<label>` da OPÇÃO como se fosse a pergunta, e
+  // o grupo saía com UMA opção só (o `radioGroup` depende do `name`, que nem sempre
+  // existe nesse HTML).
+
+  const OPCOES_SEL =
+    'input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]';
+
+  /** As opções (rádio/checkbox) DENTRO de um nó. */
+  function opcoesDentro(raiz) {
+    if (!raiz) return [];
+    try {
+      return queryAllProfundo(OPCOES_SEL, raiz).filter((el) => !el.disabled);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  /** A opção é de ESCOLHA (rádio/checkbox, nativo ou com `role`)? */
+  function ehOpcaoDeEscolha(el) {
+    if (!el) return false;
+    const type = String(el.type || '').toLowerCase();
+    const role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    return type === 'radio' || type === 'checkbox' || role === 'radio' || role === 'checkbox';
+  }
+
+  /**
+   * A RAIZ do grupo de uma opção: o ancestral que reúne as opções da MESMA pergunta.
+   *
+   * Subir até o primeiro ancestral com 2+ opções é o que conserta o caso em que o
+   * artdeco embrulha cada bolinha no seu próprio container: parar ali (era o que o
+   * `closest('[role=radiogroup], fieldset, .fb-dash-form-element')` fazia) dava um
+   * grupo de UMA opção — e cada bolinha virava uma pergunta no cartão.
+   */
+  function raizDoGrupo(el) {
+    if (!el) return null;
+
+    try {
+      const explicito = el.closest && el.closest('[role="radiogroup"]');
+      if (explicito && explicito !== el) return explicito;
+
+      let no = el.parentElement;
+      let subiu = 0;
+      while (no && no !== document.body && no !== document.documentElement && subiu < 8) {
+        if (opcoesDentro(no).length >= 2) return no;
+        no = no.parentElement;
+        subiu += 1;
+      }
+
+      // Sem ancestral comum (opções soltas): vale o agrupamento pelo `name`.
+      if (el.name) {
+        const porNome = queryAllProfundo(
+          'input[type="radio"][name="' + String(el.name).replace(/"/g, '\\"') + '"]'
+        );
+        if (porNome.length >= 2) return porNome[0].parentElement || el.parentElement;
+      }
+    } catch (error) {
+      /* sem grupo: a própria opção responde por si */
+    }
+
+    return el.parentElement || el;
+  }
+
+  /**
+   * As OPÇÕES do grupo de uma opção — TODAS as da mesma pergunta (nunca uma só).
+   *
+   * Pelo `name` quando existe (é o agrupamento que o navegador conhece) e, sem ele,
+   * pela raiz do grupo.
+   */
+  function opcoesDoGrupo(el) {
+    if (!el) return [];
+
+    try {
+      if (el.name) {
+        const porNome = radioGroup(document, el);
+        if (porNome.length >= 2) return porNome;
+      }
+      return opcoesDentro(raizDoGrupo(el));
+    } catch (error) {
+      return [el];
+    }
+  }
+
+  /**
+   * A PERGUNTA de um grupo de escolha — NUNCA o texto de uma opção.
+   */
+  function rotuloDaPerguntaDoGrupo(el) {
+    if (!el) return '';
+
+    try {
+      const raiz = raizDoGrupo(el);
+      const blocos = [
+        raiz,
+        el.closest && el.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset'),
+      ].filter(Boolean);
+
+      for (const no of blocos) {
+        const ids = String(no.getAttribute('aria-labelledby') || '')
+          .split(/\s+/)
+          .filter(Boolean);
+
+        for (const id of ids) {
+          const alvo = (no.ownerDocument || document).getElementById(id);
+          const texto = clean((alvo && alvo.textContent) || '');
+          if (texto) return texto.slice(0, 300);
+        }
+
+        const aria = clean(no.getAttribute('aria-label') || '');
+        if (aria) return aria.slice(0, 300);
+
+        const rotulo =
+          no.querySelector &&
+          no.querySelector(
+            'legend, .fb-dash-form-element__label, .jobs-easy-apply-form-element__label, ' +
+              '.artdeco-text-input--label'
+          );
+        if (rotulo) {
+          const texto = clean(rotulo.textContent);
+          if (texto) return texto.slice(0, 300);
+        }
+      }
+
+      /* Sem rótulo marcado: sobra do TEXTO DO BLOCO menos os rótulos das opções —
+       * "Você aceita…? YES NO" vira "Você aceita…?". É o caso do bloco montado com
+       * `<input type=radio>` + `<label>YES</label>`, sem `legend` nem ARIA. */
+      const bloco =
+        raiz ||
+        (el.closest && el.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset'));
+
+      if (bloco) {
+        let sobra = String(bloco.textContent || '');
+        for (const opcao of opcoesDoGrupo(el)) {
+          const texto = rotuloDaOpcao(opcao);
+          if (texto) sobra = sobra.split(texto).join(' ');
+        }
+
+        const pergunta = perguntaDoTexto(sobra);
+        if (pergunta) return pergunta.slice(0, 300);
+      }
+    } catch (error) {
+      /* sem pergunta: quem chamou segue com o que tiver */
+    }
+
+    return '';
   }
 
   /**
    * O rótulo da OPÇÃO de um rádio/checkbox — o texto ao lado da bolinha
-   * ("Sim"/"Não"), que NÃO é a pergunta. É ele que o cartão oferece.
+   * ("Sim"/"Não"/"YES"), que NÃO é a pergunta. É ele que o cartão oferece.
    */
   function rotuloDaOpcao(input) {
     if (!input) return '';
@@ -3921,8 +4137,19 @@
 
     try {
       if (ehInput && input.labels && input.labels.length) {
-        const texto = perguntaDoTexto(input.labels[0].textContent).slice(0, 80);
-        if (texto) return texto;
+        const label = input.labels[0];
+
+        /* Um `<label>` que embrulha o GRUPO inteiro (2+ opções) tem o texto da
+         * PERGUNTA + o de todas as opções: não é o rótulo desta bolinha. Nesse caso
+         * vale o irmão colado no input (o `<span>` do artdeco) ou, no fim, o `value`. */
+        if (opcoesDentro(label).length >= 2) {
+          const irmao = input.nextElementSibling;
+          const textoIrmao = clean((irmao && irmao.textContent) || '');
+          if (textoIrmao && textoIrmao.length <= 80) return textoIrmao;
+        } else {
+          const texto = perguntaDoTexto(label.textContent).slice(0, 80);
+          if (texto) return texto;
+        }
       }
 
       const aria = clean((input.getAttribute && input.getAttribute('aria-label')) || '');
