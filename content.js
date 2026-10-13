@@ -147,6 +147,8 @@
     applyStepDelayMs: 1200, // espera entre etapas do formulário
     applySettleMs: 5000, // tempo máximo esperando a etapa "parar de mudar"
     applyQuietMs: 700, // silêncio no DOM que marca "a etapa terminou de carregar"
+    valoresPrazoMs: 8000, // teto esperando os valores que o LinkedIn preenche em ondas
+    valoresPollMs: 600, // de quanto em quanto se olha se ainda chega valor novo
     applyStepWaitMs: 8000, // tempo máximo esperando a próxima etapa carregar
     applySubmitWaitMs: 20000, // tempo máximo esperando a confirmação do envio
     popupPollMs: 250, // rede de segurança: rechecagem sem mutação no DOM
@@ -2350,6 +2352,9 @@
    * guardando o elemento para podermos reaplicar a resposta no campo certo.
    */
   function camposTravados(modal) {
+    // O modal guardado pode ter sido REMONTADO pelo LinkedIn: ler o morto é ler o
+    // formulário vazio (ver `modalVivo`).
+    modal = modalVivo(modal);
     if (!modal) return [];
 
     const vistos = [];
@@ -2658,9 +2663,29 @@
 
     /* Diagnóstico barato e útil: o que foi reconhecido nesta etapa. Quando um
      * campo não aparece no cartão, é esta linha que diz se ele nem foi achado ou
-     * se foi achado com o tipo errado. */
+     * se foi achado com o tipo errado. E o `valor` lido (com as marcas de nó fora
+     * do documento e de id duplicado) é o que explica o cartão abrir EM BRANCO
+     * quando os valores estão na tela. */
     // String (e não objeto): é o log que se copia para o relato de um campo que
     // não entrou no cartão.
+    const marcaDoCampo = (c) => {
+      const el = c && c._campo;
+      if (!el) return '';
+
+      const attr = String((el.getAttribute && el.getAttribute('value')) || '');
+      const marcas = [];
+
+      if (el.isConnected === false) marcas.push('FORA-DO-DOC');
+      if (el.id && document.getElementById(el.id) !== el) marcas.push('ID-DUPLICADO');
+
+      return (
+        ' valor=' +
+        JSON.stringify(String(c.valor || '')) +
+        (attr ? ' attr=' + JSON.stringify(attr) : '') +
+        (marcas.length ? ' [' + marcas.join(' ') + ']' : '')
+      );
+    };
+
     console.log(
       '[PegaVaga] campos reconhecidos nesta etapa: ' +
         encontrados
@@ -2675,6 +2700,7 @@
               (c.opcoes && c.opcoes.length ? '(' + c.opcoes.slice(0, 3).join('/') + ')' : '') +
               ' tag=' +
               ((c._campo && c._campo.tagName) || '?') +
+              marcaDoCampo(c) +
               ' "' +
               String(c.rotulo || '').slice(0, 50) +
               '"'
@@ -2959,25 +2985,66 @@
    * originais e fecha. É o que faz a pergunta de "Selecionar opção" chegar ao
    * cartão com as opções do LinkedIn (antes ela vinha como um campo de texto).
    */
-  async function camposTravadosCompletos(modal) {
-    /* O LinkedIn PREENCHE o formulário DEPOIS de montá-lo: os valores de perfil
-     * (nome, sobrenome, telefone, e-mail, país) chegam num segundo render — o React
-     * escreve a PROPRIEDADE, não o atributo, então eles não estão no HTML nem no
-     * primeiro instante. Ler os campos cedo demais era o "o cartão abriu tudo em
-     * branco": você preenchia à mão o que já estava na tela.
-     *
-     * Então: esperamos a etapa ficar quieta e, se ainda houver campo sem valor,
-     * fazemos uma segunda leitura um instante depois — o que chegou nesse meio
-     * tempo deixa de ser pedido. Nada se perde: a leitura nova só reconhece o que
-     * já está preenchido. */
-    await waitForSettle(modal, CONFIG.applySettleMs);
+  /**
+   * O dialog VIVO.
+   *
+   * O LinkedIn REMONTA o modal (ember) a cada etapa: o nó que o fluxo guardou pode
+   * ter saído do documento. Ler o morto é ler o formulário VAZIO — o novo é que tem
+   * os valores que o LinkedIn preencheu. Era mais um jeito de o cartão abrir com
+   * tudo em branco.
+   */
+  function modalVivo(modal) {
+    if (modal && modal.isConnected !== false) return modal;
 
-    let campos = camposTravados(modal);
+    return queryAllUnique(APPLY_SEL.dialog).filter(isVisible)[0] || modal || document;
+  }
 
-    if (campos.some((campo) => !campo.valor)) {
-      await humanPause(CONFIG.applySettleMs);
-      campos = camposTravados(modal);
+  /**
+   * Espera os valores do LinkedIn pararem de chegar.
+   *
+   * O formulário do ATS (Greenhouse, por exemplo) preenche os campos EM ONDAS: o
+   * que vem do perfil chega segundos depois de a etapa aparecer — e o HTML copiado
+   * não tem `value` nenhum, porque é o React escrevendo a propriedade. Lendo só no
+   * comecinho, o cartão pedia nome/e-mail/telefone que YA estavam na tela (ou que
+   * estavam a caminho).
+   *
+   * Aqui contamos quantos campos estão SEM valor e paramos quando esse número não
+   * muda há dois ciclos (os valores pararam de chegar) ou quando acaba o prazo —
+   * assim não esperamos à toa quando o LinkedIn não vai preencher mais nada.
+   */
+  async function esperarValoresChegarem(modal, prazoMs) {
+    const prazo = Date.now() + (prazoMs || CONFIG.valoresPrazoMs);
+    let ultimo = -1;
+    let estavel = 0;
+
+    while (Date.now() < prazo) {
+      const vazios = camposTravados(modal).filter((campo) => !campo.valor).length;
+
+      if (vazios === ultimo) {
+        estavel += 1;
+        if (estavel >= 2) return;
+      } else {
+        estavel = 0;
+        ultimo = vazios;
+      }
+
+      await humanPause(CONFIG.valoresPollMs);
     }
+  }
+
+  async function camposTravadosCompletos(modal) {
+    /* Duas esperas antes de perguntar:
+     *   1. a etapa ficar quieta (parar de montar);
+     *   2. os valores do LinkedIn pararem de chegar (ver `esperarValoresChegarem`).
+     *
+     * Sem elas o cartão abria com TUDO em branco e você preenchia à mão o que já
+     * estava (ou estava a caminho de estar) na tela. */
+    const vivo = modalVivo(modal);
+
+    await waitForSettle(vivo, CONFIG.applySettleMs);
+    await esperarValoresChegarem(vivo, CONFIG.valoresPrazoMs);
+
+    const campos = camposTravados(vivo);
 
     for (const campo of campos) {
       if (!campo || campo.tipo !== 'select' || (campo.opcoes && campo.opcoes.length)) continue;
@@ -3821,6 +3888,10 @@
 
   async function aplicarRespostaNosCampos(modal, resposta) {
     if (!modal || !resposta || typeof resposta !== 'object') return 0;
+
+    // O LinkedIn remonta o modal a cada etapa: escrever no nó morto não chega na
+    // tela (ver `modalVivo`).
+    modal = modalVivo(modal);
 
     let aplicados = 0;
 
