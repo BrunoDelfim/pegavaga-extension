@@ -2960,7 +2960,24 @@
    * cartão com as opções do LinkedIn (antes ela vinha como um campo de texto).
    */
   async function camposTravadosCompletos(modal) {
-    const campos = camposTravados(modal);
+    /* O LinkedIn PREENCHE o formulário DEPOIS de montá-lo: os valores de perfil
+     * (nome, sobrenome, telefone, e-mail, país) chegam num segundo render — o React
+     * escreve a PROPRIEDADE, não o atributo, então eles não estão no HTML nem no
+     * primeiro instante. Ler os campos cedo demais era o "o cartão abriu tudo em
+     * branco": você preenchia à mão o que já estava na tela.
+     *
+     * Então: esperamos a etapa ficar quieta e, se ainda houver campo sem valor,
+     * fazemos uma segunda leitura um instante depois — o que chegou nesse meio
+     * tempo deixa de ser pedido. Nada se perde: a leitura nova só reconhece o que
+     * já está preenchido. */
+    await waitForSettle(modal, CONFIG.applySettleMs);
+
+    let campos = camposTravados(modal);
+
+    if (campos.some((campo) => !campo.valor)) {
+      await humanPause(CONFIG.applySettleMs);
+      campos = camposTravados(modal);
+    }
 
     for (const campo of campos) {
       if (!campo || campo.tipo !== 'select' || (campo.opcoes && campo.opcoes.length)) continue;
@@ -3709,6 +3726,46 @@
   }
 
   /**
+   * Escreve num TYPEAHEAD (`input role="combobox"` editável — o "Location (city)").
+   *
+   * A lista de sugestões só existe DEPOIS de digitar: abrir o campo não acha nada
+   * (é o contrário do dropdown custom, que já tem as opções no DOM). Então o
+   * caminho é escrever, esperar a sugestão aparecer e clicar na que casa — se
+   * nenhuma aparecer, o texto digitado continua valendo (é o que o LinkedIn valida).
+   */
+  async function digitarNoTypeahead(modal, campo, valor, alvoOpcao) {
+    try {
+      if (!campo || !document.contains(campo)) return false;
+
+      humanClick(campo);
+      setNativeValue(campo, valor);
+      campo.dispatchEvent(new Event('input', { bubbles: true }));
+      campo.dispatchEvent(new Event('change', { bubbles: true }));
+
+      await waitUntil(
+        () => opcoesDoCombo(modal, campo).length > 0,
+        Math.min(CONFIG.popupWaitMs, 2500)
+      );
+
+      const alvo = normalizar(alvoOpcao || valor);
+      const opcoes = opcoesDoCombo(modal, campo);
+      const escolhida =
+        opcoes.find((o) => normalizar(o.texto) === alvo) ||
+        opcoes.find((o) => normalizar(o.texto).indexOf(alvo) >= 0);
+
+      if (escolhida && escolhida.el && document.contains(escolhida.el)) {
+        humanClick(escolhida.el);
+        await humanPause(CONFIG.applyStepDelayMs);
+      }
+
+      // Vale o que ficou no campo (a escolha da lista costuma escrevê-lo também).
+      return String(campo.value || '').trim() !== '';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Quando o `<select>` ESCONDIDO não aceita a resposta, quem manda é o UI VISÍVEL:
    * o LinkedIn desenha um botão/combobox por cima e é ele que o React escuta. Clica
    * no gatilho, espera a lista (`[role="listbox"]`) e clica na opção — a mesma
@@ -4026,6 +4083,12 @@
                 diagnosticoDoCampo(campo)
             );
           }
+        } else if (tag === 'input' && !campo.readOnly && ehCombo(campo)) {
+          /* TYPEAHEAD (o "Location (city)" do Easy Apply): um `input role="combobox"`
+          * EDITÁVEL. A lista de sugestões só aparece DEPOIS de digitar — abrir não
+          * acha nada. O caminho é escrever e escolher a sugestão (ou ficar com o
+          * texto digitado, que é o que o LinkedIn valida). */
+          if (await digitarNoTypeahead(modal, campo, valor, alvoOpcao)) aplicados += 1;
         } else if (ehCombo(campo) || (tag === 'input' && campo.readOnly)) {
           // Dropdown custom (ou `<input readonly>` de escolha — o do artdeco):
           // abre, acha a opção pelo texto e clica. Sem abrir não há lista no DOM

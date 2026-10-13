@@ -250,6 +250,19 @@ da build).
 
 ### Corrigido
 
+- **O cartão abria com TUDO em branco numa etapa que já estava preenchida**: o
+  LinkedIn escreve os valores de PERFIL (nome, sobrenome, telefone, e-mail, país)
+  **depois** de montar o formulário — é o React escrevendo a propriedade, não o
+  atributo (ver `tests/fixtures/linkedin-etapa-contato.html`). Lendo os campos no
+  primeiro instante, o cartão pedia nome/e-mail/telefone que já estavam na tela.
+  Agora `camposTravadosCompletos` espera a etapa ficar quieta e, se ainda houver
+  campo sem valor, faz uma SEGUNDA leitura um instante depois: o que chegou nesse
+  meio tempo deixa de ser pedido (prova vermelho/verde: sem isso, o cartão lista
+  os 6 campos da etapa; com isso, só o que falta).
+- **O TYPEAHEAD ("Location (city)") não era preenchido**: é um
+  `input role="combobox"` EDITÁVEL — a lista de sugestões só aparece depois de
+  digitar, então abrir o campo não acha nada. Agora ele é escrito e a sugestão que
+  casa é clicada (sem sugestão, vale o texto digitado).
 - **Pergunta JÁ RESPONDIDA no LinkedIn não entra mais no cartão**: a rede de rótulos
   (`camposPorPergunta`) reportava o bloco mesmo com o campo resolvido — o cartão
   abria com TODOS os campos da etapa quando só um estava faltando. Agora o bloco só

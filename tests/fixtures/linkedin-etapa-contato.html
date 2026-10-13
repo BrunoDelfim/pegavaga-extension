@@ -1,0 +1,163 @@
+<!-- =============================================================================
+     PegaVaga - tests/fixtures/linkedin-etapa-contato.html
+
+     HTML REAL da PRIMEIRA etapa do Easy Apply ("Informações de contato", 0% do
+     progresso), copiada do LinkedIn numa vaga que vai por Greenhouse.
+
+     (Os `id` foram encurtados para o arquivo ficar legível; classes, rótulos,
+     hierarquia e atributos são os do LinkedIn. A lista de países — 250 no
+     original — também está recortada: é dado, não estrutura.)
+
+     É a etapa que mostrou o cartão EM BRANCO: o LinkedIn escreve os valores de
+     PERFIL (nome, sobrenome, telefone, e-mail) DEPOIS de montar o formulário — no
+     HTML copiado não há `value` nenhum, porque o React escreve a propriedade, não
+     o atributo. Lendo os campos cedo demais, o cartão pedia nome/e-mail/telefone
+     que JÁ estavam na tela, tudo em branco.
+
+     O último campo — "Location (city)" — é um TYPEAHEAD (`input role="combobox"`
+     com `aria-expanded="false"`): a lista de sugestões só aparece depois de digitar.
+     ============================================================================= -->
+<div data-test-modal="" role="dialog" tabindex="-1" class="artdeco-modal artdeco-modal--layer-default jobs-easy-apply-modal" size="large" aria-labelledby="jobs-apply-header">
+  <span class="a11y-text">Início do conteúdo do diálogo.</span>
+  <button aria-label="Fechar" class="artdeco-modal__dismiss" data-test-modal-close-btn="">Fechar</button>
+
+  <div class="artdeco-modal__header ember-view">
+    <h2 id="jobs-apply-header">Candidate-se na Braze</h2>
+  </div>
+
+  <div class="artdeco-modal__content jobs-easy-apply-modal__content p0 ember-view">
+    <div class="GAcntcDXfrGlwHxYDxHeyrfMaRSeVKqosSnla" tabindex="-1" aria-label="O andamento da sua candidatura está em 0 porcento." role="region">
+      <div class="display-flex ph5 pv2">
+        <progress max="100" value="0" aria-valuetext="Valor atual: 0">Valor atual: 0</progress>
+        <span class="pl3 t-14 t-black--light" role="note">0%</span>
+      </div>
+
+      <form>
+        <div class="ph5">
+          <div class="ahxxQseMCyMeiYlIrKqolilXhOVXWhvGJIhas">
+            <h3 class="t-16 t-bold">Informações de contato</h3>
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt1" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div data-test-single-line-text-form-component="">
+                  <div class="artdeco-text-input artdeco-text-input--type-text artdeco-text-input--state-required ember-view">
+                    <div class="artdeco-text-input--container ember-view">
+                      <label for="form-element-nome" class="artdeco-text-input--label">First name</label>
+                      <input inputmode="text" class="artdeco-text-input--input" id="form-element-nome" required="" dir="auto" type="text">
+                    </div>
+                  </div>
+                  <div id="form-element-nome-error"><!----></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div data-test-single-line-text-form-component="">
+                  <div class="artdeco-text-input artdeco-text-input--type-text artdeco-text-input--state-required ember-view">
+                    <div class="artdeco-text-input--container ember-view">
+                      <label for="form-element-sobrenome" class="artdeco-text-input--label">Last name</label>
+                      <input inputmode="text" class="artdeco-text-input--input" id="form-element-sobrenome" required="" dir="auto" type="text">
+                    </div>
+                  </div>
+                  <div id="form-element-sobrenome-error"><!----></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div data-test-text-entity-list-form-component="">
+                  <label for="form-element-pais" class="fb-dash-form-element__label fb-dash-form-element__label-title--is-required" data-test-text-entity-list-form-title="">
+                    <span>Phone country code</span>
+                  </label>
+                  <span class="visually-hidden" data-test-text-entity-list-form-required="">Obrigatório</span>
+                  <select id="form-element-pais" class="fb-dash-form-element__select-dropdown" aria-required="true" required="" data-test-text-entity-list-form-select="">
+                    <option value="Select an option">Select an option</option>
+                    <option value="Brazil (+55)">Brazil (+55)</option>
+                    <option value="Afghanistan (+93)">Afghanistan (+93)</option>
+                    <option value="Portugal (+351)">Portugal (+351)</option>
+                    <option value="United States (+1)">United States (+1)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div data-test-single-line-text-form-component="">
+                  <div class="artdeco-text-input artdeco-text-input--type-text artdeco-text-input--state-required ember-view">
+                    <div class="artdeco-text-input--container ember-view">
+                      <label for="form-element-telefone" class="artdeco-text-input--label">Mobile phone number</label>
+                      <input inputmode="text" class="artdeco-text-input--input" id="form-element-telefone" required="" dir="auto" type="text">
+                    </div>
+                  </div>
+                  <div id="form-element-telefone-error"><!----></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div data-test-text-entity-list-form-component="">
+                  <label for="form-element-email" class="fb-dash-form-element__label fb-dash-form-element__label-title--is-required" data-test-text-entity-list-form-title="">
+                    <span>Email address</span>
+                  </label>
+                  <span class="visually-hidden" data-test-text-entity-list-form-required="">Obrigatório</span>
+                  <select id="form-element-email" class="fb-dash-form-element__select-dropdown" aria-required="true" required="" data-test-text-entity-list-form-select="">
+                    <option value="Select an option">Select an option</option>
+                    <option value="brn.dfm@gmail.com">brn.dfm@gmail.com</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY">
+              <div class="fb-dash-form-element mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+                <div class="relative" data-test-single-typeahead-entity-form-component="">
+                  <label for="form-element-cidade" class="fb-dash-form-element__label fb-dash-form-element__label-title--is-required" data-test-single-typeahead-entity-form-title="true">
+                    <span>Location (city)</span>
+                  </label>
+                  <div class="search-basic-typeahead search-vertical-typeahead">
+                    <input id="form-element-cidade" class="basic-input" required="" dir="auto" role="combobox" aria-autocomplete="list" aria-activedescendant="" aria-expanded="false" type="text">
+                  </div>
+                </div>
+                <div id="form-element-cidade-error">
+                  <div class="artdeco-inline-feedback artdeco-inline-feedback--error ember-view mt1" role="alert" data-test-form-element-error-messages="">
+                    <span class="artdeco-inline-feedback__message">Please enter a valid answer</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer role="presentation">
+          <div class="display-flex justify-flex-end ph5 pv4">
+            <button aria-label="Avançar para próxima etapa" class="artdeco-button artdeco-button--2 artdeco-button--primary ember-view" data-easy-apply-next-button="" data-live-test-easy-apply-next-button="" type="button">
+              <span class="artdeco-button__text">Avançar</span>
+            </button>
+          </div>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <span class="a11y-text">Término do conteúdo do diálogo.</span>
+</div>
+
+<script>
+  /* O LinkedIn: os valores de PERFIL chegam DEPOIS de montar o formulário (é o
+   * React escrevendo a propriedade, não o atributo). A etapa fica em branco por um
+   * instante — e era nesse instante que o cartão abria pedindo tudo de novo. */
+  setTimeout(function () {
+    var porId = function (id) { return document.getElementById(id); };
+
+    if (porId('form-element-nome')) porId('form-element-nome').value = 'Bruno';
+    if (porId('form-element-sobrenome')) porId('form-element-sobrenome').value = 'Delfim';
+    if (porId('form-element-telefone')) porId('form-element-telefone').value = '11999998888';
+    if (porId('form-element-pais')) porId('form-element-pais').value = 'Brazil (+55)';
+    if (porId('form-element-email')) porId('form-element-email').value = 'brn.dfm@gmail.com';
+  }, 300);
+</script>
