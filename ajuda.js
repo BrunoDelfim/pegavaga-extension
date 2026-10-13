@@ -37,6 +37,12 @@
   const campos = Array.isArray(dados.campos) ? dados.campos : [];
   const ehDemora = dados.motivo === 'demora';
 
+  /* O casamento de opção do resto da extensão (o módulo puro `ajuda-campos.js`, o
+   * mesmo que o content script usa): é ele que diz QUAL opção do cartão corresponde
+   * ao que já está preenchido no LinkedIn — e que opção a sua resposta escolheu. */
+  const AJUDA_CAMPOS = window.PegaVagaAjuda || {};
+  const escolherOpcaoDaLista = AJUDA_CAMPOS.escolherOpcao;
+
   /* ------------------------------------------------------------------------ */
   /* Posicionamento: canto inferior direito (ou a posição memorizada)          */
   /* ------------------------------------------------------------------------ */
@@ -109,6 +115,11 @@
   function permitirArrastar() {
     const cabeca = document.getElementById('cabeca');
     if (!cabeca) return;
+
+    /* Sem a API de janelas (ou num contexto que não a expõe), o ARRASTO não existe —
+     * mas o cartão continua inteiro: perder os botões por causa do arrasto seria
+     * perder a única saída que você tem quando a etapa trava. */
+    if (!chrome.windows || typeof chrome.windows.getCurrent !== 'function') return;
 
     let janelaId = null;
     let baseLeft = 0;
@@ -194,6 +205,8 @@
       if ((c && c.tipo === 'texto') || !opcoes.length) {
         controle = document.createElement('input');
         controle.type = 'text';
+        // Já vem com o que o campo mostra no LinkedIn: você confere e corrige.
+        if (c && c.valor) controle.value = String(c.valor);
       } else {
         // Select/rádio/checkbox: um <select> com as opções ORIGINAIS do
         // LinkedIn. O valor é o TEXTO da opção — é o que o content script usa
@@ -209,6 +222,15 @@
           o.textContent = String(op);
           controle.appendChild(o);
         });
+
+        // A escolha que JÁ ESTÁ no LinkedIn vem pré-selecionada (mesmo casamento
+        // de opção do resto da extensão: exato, depois "contém").
+        const escolhida =
+          typeof escolherOpcaoDaLista === 'function'
+            ? escolherOpcaoDaLista(opcoes, (c && c.valor) || '')
+            : -1;
+
+        if (escolhida >= 0) controle.value = String(opcoes[escolhida]);
       }
 
       controle.id = 'campo-' + i;

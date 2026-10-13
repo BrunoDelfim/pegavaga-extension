@@ -67,8 +67,8 @@
     );
 
     ok(
-      'o select COM opcao ja marcada ainda vem como select, com as opcoes',
-      resumo.some((r) => r.indexOf('select [Básico/Intermediário/Avançado]') === 0),
+      'o select JA respondido (opcao marcada) nao entra no cartao',
+      !resumo.some((r) => r.indexOf('proficiência em Inglês') >= 0),
       resumo.join(' || ')
     );
 
@@ -79,9 +79,31 @@
     );
 
     ok(
-      'radio ja respondido, com botao no bloco, NAO vira texto',
-      resumo.some((r) => r.indexOf('radio [Yes/No]') === 0 && r.indexOf('equipes remotas') >= 0),
+      'pergunta JA respondida no LinkedIn nao entra no cartao (nem com botao no bloco)',
+      !resumo.some((r) => r.indexOf('equipes remotas') >= 0),
       resumo.join(' || ')
+    );
+
+    /* O que o campo já MOSTRA vai junto na descrição — é disso que o cartão
+     * pré-preenche (você confere e responde só o que falta). */
+    const selNivel = document.getElementById('sel-nivel');
+    const remY = document.getElementById('rem-y');
+    const selSalario = document.getElementById('sel-salario');
+
+    ok(
+      'o valor do select ja escolhido vai junto',
+      T.descreverCampo(selNivel, modal).valor === 'Básico',
+      JSON.stringify(T.descreverCampo(selNivel, modal).valor)
+    );
+    ok(
+      'o valor do radio marcado vai junto',
+      T.descreverCampo(remY, modal).valor === 'Yes',
+      JSON.stringify(T.descreverCampo(remY, modal).valor)
+    );
+    ok(
+      'placeholder NAO conta como valor',
+      T.descreverCampo(selSalario, modal).valor === '',
+      JSON.stringify(T.descreverCampo(selSalario, modal).valor)
     );
 
     /* ---------------------------------------------------------------------- */
@@ -210,6 +232,12 @@
       'o campo de texto recebeu o valor',
       aplicadosTexto === 1 && txt.value === '7',
       'aplicados=' + aplicadosTexto + ' valor=' + txt.value
+    );
+
+    ok(
+      'o valor do texto ja preenchido vai junto no cartao',
+      T.descreverCampo(txt, modal).valor === '7',
+      JSON.stringify(T.descreverCampo(txt, modal).valor)
     );
 
     /* ---------------------------------------------------------------------- */

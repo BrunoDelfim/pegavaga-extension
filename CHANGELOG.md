@@ -250,6 +250,13 @@ da build).
 
 ### Corrigido
 
+- **Pergunta JÁ RESPONDIDA no LinkedIn não entra mais no cartão**: a rede de rótulos
+  (`camposPorPergunta`) reportava o bloco mesmo com o campo resolvido — o cartão
+  abria com TODOS os campos da etapa quando só um estava faltando. Agora o bloco só
+  entra se o controle escolhido estiver sem resposta.
+- **A janelinha não perde o cartão sem a API de janelas** (`chrome.windows`): a
+  posição/arrasto ficava no caminho do resto do `iniciar()` — sem a API, os campos
+  nem eram desenhados.
 - **O PREENCHIMENTO dos campos (rádio, select e texto) não acontecia por um erro de
   seletor** (`queryAllUnique`): a função recebe a LISTA de seletores, e três chamadas
   novas passavam uma **string** — `for (const s of 'input, select')` itera os
@@ -296,6 +303,15 @@ da build).
 
 ### Adicionado
 
+- **O cartão abre PREENCHIDO com o que já está no LinkedIn**: cada campo levou o
+  `valor` (o que ele mostra na página, com placeholder contando como vazio) e a
+  janelinha/aba pré-seleciona a opção ou preenche o texto. Numa etapa em que falta
+  UM campo, você confere o que já está lá e responde só o que falta — a resposta sai
+  com tudo (o que estava preenchido junto), então nada se perde.
+- **A página REAL da extensão nos testes de DOM**: o harness carrega `ajuda.html`
+  (a janelinha) com o `chrome` falso e roda o `ajuda.js` de verdade —
+  `tests/smoke-dom-janelinha.js`, que confere o cartão preenchido e a resposta no
+  mesmo contrato que o content script espera.
 - **Suíte dirigida por FIXTURES do LinkedIn real** (`tests/smoke-dom-linkedin.js`):
   cada arquivo em `tests/fixtures/*.html` é uma etapa copiada da página (Copy
   outerHTML) e roda no Chromium com o `content.js` de verdade. O roteiro é

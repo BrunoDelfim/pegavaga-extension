@@ -28,6 +28,7 @@ const raiz = path.join(__dirname, '..');
 let falhas = 0;
 let total = 0;
 let pagina = ''; // nasce no /tmp (dentro de jobs/, ver abaixo) e é apagada no fim
+let consultaPagina = ''; // query da página (o `dados=` da janelinha)
 const temporarias = []; // cada página montada (o teste de fixtures monta várias)
 
 /** O Chrome de teste: `PGV_CHROME`, ou o que o `baixar-chromium.sh` deixou. */
@@ -74,11 +75,15 @@ function pular() {
 }
 
 function finalizar(resumo) {
-  for (const dir of temporarias) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch (error) {
-      /* o /tmp se limpa sozinho */
+  if (process.env.PGV_DOM_KEEP) {
+    console.log('\n  (pagina mantida para inspecao: ' + pagina + ')');
+  } else {
+    for (const dir of temporarias) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (error) {
+        /* o /tmp se limpa sozinho */
+      }
     }
   }
 
@@ -136,6 +141,20 @@ const CHROME_FALSO = `
         return Promise.resolve({});
       },
       onMessage: { addListener: function (fn) { ouvintes.push(fn); } }
+    },
+    windows: {
+      // A janelinha usa isto para se posicionar e para arrastar (o cartão move a
+      // janela). Sem a API aqui, o teste perderia o resto do iniciar().
+      getCurrent: function (cb) {
+        var janela = { id: 1, left: 0, top: 0, width: 400, height: 520 };
+        if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
+        return Promise.resolve(janela);
+      },
+      update: function (id, info, cb) {
+        var janela = Object.assign({ id: id }, info || {});
+        if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
+        return Promise.resolve(janela);
+      }
     }
   };
 
@@ -179,6 +198,17 @@ const CHROME_FALSO = `
     saida.textContent +=
       (cond ? 'OK ' : 'FALHA ') + nome + (cond || !detalhe ? '' : ' -> ' + detalhe) + '\\n';
   }
+
+  // Erros da página também entram no relatório: quando um script não roda (um
+  // seletor quebrado, algo do chrome que não existe no teste), aparece aqui.
+  window.addEventListener('error', function (ev) {
+    var onde = (ev.filename || '').split('/').pop();
+    logs.textContent += 'erro: ' + (ev.message || 'sem mensagem') + ' @ ' + onde + ':' + ev.lineno + '\\n';
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    var r = ev.reason || {};
+    logs.textContent += 'rejeicao: ' + ((r && (r.name + ': ' + r.message)) || String(r)) + '\\n';
+  });
 
   /** Texto de um nó, sem espaços sobrando (só para comparar no teste). */
   function cleanTexto(texto) {
@@ -253,6 +283,10 @@ const CHROME_FALSO = `
  * O arquivo fica em `<tmp>/jobs/search/pagina.html` DE PROPÓSITO: o content.js
  * aceita a página como "página de vagas" quando o caminho tem `/jobs` (ver
  * `isUsablePage`), e é assim que a fila é retomada em vez de descartada.
+ *
+ * Com `arquivoHtml`, a página é uma PÁGINA DE VERDADE da extensão (a janelinha
+ * `ajuda.html`): os `src` relativos viram absolutos, o `chrome` falso e o roteiro
+ * entram nela e o teste roda no HTML REAL — do mesmo jeito que as fixtures.
  */
 function montarPagina(opcoes) {
   const raizTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pgv-dom-'));
@@ -262,32 +296,47 @@ function montarPagina(opcoes) {
 
   fs.mkdirSync(dir, { recursive: true });
   pagina = path.join(dir, 'pagina.html');
+  consultaPagina = opcoes.query || '';
 
   const scripts = (opcoes.scripts || [])
     .map((arquivo) => `<script src="file://${raiz}/${arquivo}"></script>`)
     .join('\n');
 
-  fs.writeFileSync(
-    pagina,
-    `<!doctype html>
+  const dados = `<script>${
+    opcoes.dados ? 'window.__pgvDados = ' + JSON.stringify(opcoes.dados) + ';' : ''
+  }</script>`;
+
+  const html = opcoes.arquivoHtml
+    ? fs
+        .readFileSync(path.join(raiz, opcoes.arquivoHtml), 'utf8')
+        .replace(/src="([^"/:]+\.js)"/g, 'src="file://' + raiz + '/$1"')
+        .replace(
+          /<script/,
+          `<pre id="pgv-saida"></pre><pre id="pgv-logs"></pre>${dados}<script>${CHROME_FALSO}</script>\n<script`
+        )
+        .replace('</body>', scripts + '\n</body>')
+    : `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>PegaVaga - ${opcoes.titulo || 'etapa'}</title></head>
 <body>
 ${opcoes.corpo}
 <pre id="pgv-saida"></pre>
 <pre id="pgv-logs"></pre>
-<script>${opcoes.dados ? 'window.__pgvDados = ' + JSON.stringify(opcoes.dados) + ';' : ''}</script>
+${dados}
 <script>${CHROME_FALSO}</script>
 ${scripts}
-</body></html>`
-  );
+</body></html>`;
+
+  fs.writeFileSync(pagina, html);
 
   return pagina;
 }
 
 /** Roda o browser na página e devolve o DOM final (com o que a página escreveu). */
-function rodar(orcamentoMs) {
+function rodar(orcamentoMs, consulta) {
   const chromium = acharChromium();
   if (!chromium) return null;
+
+  const busca = consulta === undefined ? consultaPagina : consulta;
 
   return execFileSync(
     chromium,
@@ -295,9 +344,13 @@ function rodar(orcamentoMs) {
       '--no-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
+      // Sem isto, cada `file://` é origem própria e o Chrome esconde o erro dos
+      // scripts carregados (só "Script error."): com a permissão, o teste enxerga a
+      // exceção de verdade.
+      '--allow-file-access-from-files',
       '--virtual-time-budget=' + (orcamentoMs || 30000),
       '--dump-dom',
-      'file://' + pagina,
+      'file://' + pagina + (busca ? '?' + busca : ''),
     ],
     { encoding: 'utf8', timeout: 300000, stdio: ['ignore', 'pipe', 'ignore'] }
   );
@@ -345,11 +398,16 @@ function mostrarLogs(dom) {
   const doPegaVaga = comLogs[1]
     .split('\n')
     .map((linha) => linha.trim())
-    .filter((linha) => linha.indexOf('[PegaVaga]') >= 0);
+    .filter(
+      (linha) =>
+        linha.indexOf('[PegaVaga]') >= 0 ||
+        linha.indexOf('erro:') === 0 ||
+        linha.indexOf('rejeicao:') === 0
+    );
 
   if (!doPegaVaga.length) return;
 
-  console.log('\n  -- o que o content.js disse (console) --');
+  console.log('\n  -- o que a pagina disse (console) --');
   for (const linha of doPegaVaga) console.log('  ' + linha);
 }
 

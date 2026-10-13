@@ -2094,6 +2094,9 @@
               opcoes: Array.isArray(c.opcoes)
                 ? c.opcoes.map((o) => String(o).slice(0, 80)).slice(0, 30)
                 : [],
+              // O que o campo já mostra no LinkedIn: a janelinha abre PREENCHIDA com
+              // isso, para você conferir e responder só o que falta.
+              valor: String(c.valor || '').slice(0, 120),
             }))
         : [],
     };
@@ -2122,6 +2125,58 @@
   }
 
   /**
+   * O que o campo MOSTRA agora (o valor real, já preenchido no LinkedIn).
+   *
+   * É o que o cartão pré-seleciona: numa etapa em que falta UM campo, você confere o
+   * que já está lá e responde só o que falta — em vez de reescrever tudo.
+   *
+   * Placeholder NÃO é valor ("Selecionar opção", "— escolher —"): mostrar o
+   * placeholder como se fosse resposta não ajuda ninguém.
+   */
+  function valorAtual(campo) {
+    if (!campo) return '';
+
+    try {
+      const tag = String(campo.tagName || '').toLowerCase();
+      const tipo = String(campo.type || '').toLowerCase();
+      const get = (nome) => String((campo.getAttribute && campo.getAttribute(nome)) || '');
+
+      if (tag === 'select') {
+        const opcao = campo.options ? campo.options[campo.selectedIndex] : null;
+        const texto = clean((opcao && opcao.textContent) || '');
+        if (!texto || PLACEHOLDER_RE.test(texto)) return '';
+        return texto.slice(0, 120);
+      }
+
+      if (tipo === 'radio' || ehRadioCustom(campo)) {
+        const marcado = campo.checked === true || get('aria-checked') === 'true';
+        return marcado ? rotuloDaOpcao(campo).slice(0, 120) : '';
+      }
+
+      if (tipo === 'checkbox') return campo.checked === true ? 'Sim' : '';
+      if (tipo === 'hidden' || tipo === 'file') return '';
+
+      if (tag === 'input' || tag === 'textarea') {
+        const texto = clean(campo.value || '');
+        if (!texto || textoEhPlaceholderDeLista(campo)) return '';
+        return texto.slice(0, 120);
+      }
+
+      if (get('contenteditable') === 'true') return clean(campo.textContent || '').slice(0, 120);
+
+      // Combobox/dropdown custom: o valor é o que o gatilho está mostrando.
+      const mostrado = clean(campo.textContent || '');
+      if (ehCombo(campo) && mostrado && !textoEhPlaceholderDeLista(campo)) {
+        return mostrado.slice(0, 120);
+      }
+    } catch (error) {
+      /* campo quebrado: sem valor */
+    }
+
+    return '';
+  }
+
+  /**
    * Descreve um campo para a janelinha: `{ rotulo, tipo, opcoes }`.
    *   - `tipo`: `'texto'` | `'select'` | `'radio'` | `'checkbox'`;
    *   - `opcoes`: as opções originais (texto do `<select>`, rótulos dos rádios…).
@@ -2130,6 +2185,12 @@
     const rotulo = fieldLabel(campo) || '';
     const tag = String(campo.tagName || '').toLowerCase();
     const type = String(campo.type || '').toLowerCase();
+
+    /* O que o campo MOSTRA agora. O cartão usa isto para já vir preenchido com o que
+     * está no LinkedIn — você confere e corrige só o que falta, em vez de reescrever
+     * o formulário inteiro por causa de um campo. */
+    const valor = valorAtual(campo);
+    const descricao = (tipo, opcoes) => ({ rotulo, tipo, opcoes, valor });
 
     if (tag === 'select') {
       let opcoes = Array.from(campo.options || [])
@@ -2143,7 +2204,7 @@
        * deixar o campo sem escolha nenhuma no cartão. */
       if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) opcoes = ['Sim', 'Não'];
 
-      return { rotulo, tipo: 'select', opcoes };
+      return descricao('select', opcoes);
     }
 
     /* ESCOLHA (rádio/checkbox) vem ANTES do ramo de lista: um rádio é escolha com
@@ -2159,15 +2220,15 @@
       /* Sem rótulo nenhum nas opções e a pergunta é de sim/não? O LinkedIn usa
        * "Yes"/"No" — melhor mostrá-los do que deixar o campo sem escolha. */
       if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) {
-        return { rotulo, tipo: 'radio', opcoes: ['Sim', 'Não'] };
+        return descricao('radio', ['Sim', 'Não']);
       }
 
-      return { rotulo, tipo: 'radio', opcoes };
+      return descricao('radio', opcoes);
     }
 
     if (type === 'checkbox') {
       // Binário: marcar ou não. O rótulo costuma ser a pergunta ("Autorizo…").
-      return { rotulo, tipo: 'checkbox', opcoes: ['Sim', 'Não'] };
+      return descricao('checkbox', ['Sim', 'Não']);
     }
 
     /* Combobox/dropdown custom do Easy Apply: é uma div/botão que abre uma
@@ -2189,11 +2250,11 @@
 
       if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) opcoes = ['Sim', 'Não'];
 
-      return { rotulo, tipo: 'select', opcoes };
+      return descricao('select', opcoes);
     }
 
     // input/textarea de texto (texto, número, e-mail…).
-    return { rotulo, tipo: 'texto', opcoes: [] };
+    return descricao('texto', []);
   }
 
   /**
@@ -2822,6 +2883,15 @@
 
       const candidatoForte = candidatos.filter((el) => fortes.indexOf(el) >= 0);
       const controle = candidatoForte[0] || fortes[0] || candidatos[0] || controles[0] || bloco;
+
+      /* Pergunta JÁ RESPONDIDA no LinkedIn não entra no cartão: ela não trava a etapa.
+       *
+       * A rede de rótulos existe para os blocos que nenhum outro reconhecedor pegou —
+       * e um bloco com a opção marcada (ou o texto digitado) já está resolvido. Sem
+       * esta guarda, o cartão abria com TODOS os campos da etapa quando só UM estava
+       * faltando. */
+      if (jaRespondido(controle)) continue;
+
       const descricao = descreverCampo(controle, modal);
 
       saida.push({
@@ -3075,6 +3145,8 @@
         if ((campo && campo.tipo === 'texto') || !opcoes.length) {
           controle = no('input');
           controle.type = 'text';
+          // Já vem com o que o campo mostra no LinkedIn: você confere e corrige.
+          if (campo && campo.valor) controle.value = String(campo.valor);
         } else {
           controle = no('select');
           const vazia = document.createElement('option');
@@ -3087,6 +3159,10 @@
             item.textContent = String(opcao);
             controle.appendChild(item);
           });
+
+          // A escolha que JÁ ESTÁ no LinkedIn vem pré-selecionada.
+          const escolhida = escolherOpcao(opcoes, (campo && campo.valor) || '');
+          if (escolhida >= 0) controle.value = String(opcoes[escolhida]);
         }
 
         bloco.appendChild(controle);
