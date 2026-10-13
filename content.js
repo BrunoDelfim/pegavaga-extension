@@ -3216,6 +3216,37 @@
    * era por isso que a pergunta de lista não aparecia como select no cartão (ela
    * caía no ramo de texto e virava um input sem opção).
    */
+  /**
+   * Resumo de um controle para os avisos do console: tag, papel, visibilidade, nº
+   * de opções e o que ele mostra AGORA. É o que permite descobrir só pelo log por
+   * que uma resposta não entrou — sem precisar adivinhar.
+   */
+  function diagnosticoDoCampo(el) {
+    try {
+      const tag = String(el.tagName || '?').toLowerCase();
+      const role = (el.getAttribute && el.getAttribute('role')) || '';
+      const tipo = (el.getAttribute && el.getAttribute('type')) || '';
+      const opcoes = tag === 'select' && el.options ? el.options.length : -1;
+
+      return (
+        '(tag=' +
+        tag +
+        (tipo ? ':' + tipo : '') +
+        (role ? '[' + role + ']' : '') +
+        ' visivel=' +
+        (isVisible(el) ? 'sim' : 'nao') +
+        (opcoes >= 0 ? ' opcoes=' + opcoes : '') +
+        ' valor=' +
+        JSON.stringify(String(el.value == null ? '' : el.value).slice(0, 40)) +
+        ' texto=' +
+        JSON.stringify(clean(el.textContent || '').slice(0, 40)) +
+        ')'
+      );
+    } catch (error) {
+      return '(sem detalhes)';
+    }
+  }
+
   function ehCombo(el) {
     if (!el) return false;
 
@@ -3442,13 +3473,19 @@
 
     let aplicados = 0;
 
+    /* Aqui vale a MESMA regra da detecção: o LinkedIn ESCONDE o controle nativo
+     * atrás do UI estilizado (o `<select>` do artdeco fica sem caixa). Se a
+     * varredura aceita o campo escondido (`visivelOuControle`), a busca para
+     * ESCREVER também precisa aceitar — exigir `isVisible` aqui foi o que deixou o
+     * select sem nunca ser encontrado na hora de preencher (o cartão pedia, a
+     * resposta não entrava). */
     const buscarCampo = (alvoPergunta) => {
       // Re-busca o formulário AGORA (o modal pode ter sido reconstruído desde
       // que o cartão abriu): o rótulo manda, e vale campo nativo ou combobox.
       for (const el of queryAllUnique(APPLY_SEL.invalid, modal)) {
         if (!isVisible(el)) continue;
         const real = resolverCampo(el);
-        if (!real || !isVisible(real)) continue;
+        if (!real || !visivelOuControle(real)) continue;
         if (normalizar(fieldLabel(real) || real.textContent).indexOf(alvoPergunta) >= 0) {
           return real;
         }
@@ -3458,7 +3495,7 @@
         'input, select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]',
         modal
       )) {
-        if (!isVisible(el)) continue;
+        if (!visivelOuControle(el)) continue;
         if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
       }
 
@@ -3481,7 +3518,7 @@
           'select, input:not([type="hidden"]), textarea, [role="combobox"], [role="radio"], ' +
             '[aria-haspopup], [aria-expanded]',
           bloco
-        ).filter(isVisible);
+        ).filter(visivelOuControle);
 
         if (controles.length === 1) return controles[0]; // bloco de UMA pergunta
 
@@ -3499,7 +3536,7 @@
       for (const el of queryAllProfundo(
         'input, select, textarea, [role="combobox"], [aria-haspopup="listbox"], [aria-expanded]'
       )) {
-        if (!pertenceAoFormulario(el, modal) || !isVisible(el)) continue;
+        if (!pertenceAoFormulario(el, modal) || !visivelOuControle(el)) continue;
         if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
       }
 
@@ -3552,7 +3589,7 @@
           'select, input:not([type="hidden"]), textarea, [role="combobox"], [role="radio"], ' +
             '[aria-haspopup], [aria-expanded], input[readonly]',
           campo
-        ).filter(isVisible);
+        ).filter(visivelOuControle);
 
         const radios = controles.filter(
           (el) => String(el.type || '').toLowerCase() === 'radio' || ehRadioCustom(el)
@@ -3572,11 +3609,17 @@
         }
       }
 
-      if (!campo) continue;
+      if (!campo) {
+        console.warn(
+          '[PegaVaga] nao achei o campo da pergunta "' + rotulo + '" para escrever a resposta; seguindo.'
+        );
+        continue;
+      }
 
       const tag = String(campo.tagName || '').toLowerCase();
       const type = String(campo.type || '').toLowerCase();
 
+      const antes = aplicados;
       try {
         if (tag === 'select') {
           // Escolhe a opção cujo texto/valor casa com o que VOCÊ escolheu (não com a
@@ -3586,11 +3629,52 @@
             opcoes.find((o) => normalizar(o.textContent) === alvoOpcao) ||
             opcoes.find((o) => normalizar(o.textContent).indexOf(alvoOpcao) >= 0) ||
             opcoes.find((o) => normalizar(o.value) === alvoOpcao);
+
           if (opcao) {
-            setNativeValue(campo, opcao.value);
-            campo.dispatchEvent(new Event('input', { bubbles: true }));
-            campo.dispatchEvent(new Event('change', { bubbles: true }));
-            aplicados += 1;
+            const alvoValor = String(opcao.value);
+
+            /* Escreve passando pelo setter NATIVO (o React do LinkedIn instala um
+             * descritor próprio no elemento) e avisa pelos eventos que ele escuta —
+             * `fireFieldEvents` manda `input`, `change` e `blur`, exatamente como o
+             * caminho antigo de preenchimento (que funcionava). Faltava o `blur`
+             * aqui: é ao sair do campo que o LinkedIn valida o select. */
+            setNativeValue(campo, alvoValor);
+            fireFieldEvents(campo);
+
+            /* CONFERE se a escrita PEGOU. O LinkedIn remonta o `<select>` em alguns
+             * passos e a escolha volta ao placeholder: sem conferir, o fluxo dizia
+             * "preenchi" com o campo vazio e a etapa travava de novo. Se o `value`
+             * não pegou, marca pelo ÍNDICE (há select cujo `value` repete). */
+            if (String(campo.value) !== alvoValor) {
+              try {
+                campo.selectedIndex = opcoes.indexOf(opcao);
+                fireFieldEvents(campo);
+              } catch (error) {
+                /* select sem índice: fica com o que deu */
+              }
+            }
+
+            if (String(campo.value) === alvoValor) {
+              aplicados += 1;
+            } else {
+              console.warn(
+                '[PegaVaga] o select "' +
+                  rotulo +
+                  '" nao aceitou "' +
+                  alvoValor +
+                  '" ' +
+                  diagnosticoDoCampo(campo)
+              );
+            }
+          } else {
+            console.warn(
+              '[PegaVaga] a resposta "' +
+                valor +
+                '" nao esta entre as opcoes do select "' +
+                rotulo +
+                '" ' +
+                diagnosticoDoCampo(campo)
+            );
           }
         } else if (ehCombo(campo) || (tag === 'input' && campo.readOnly)) {
           // Dropdown custom (ou `<input readonly>` de escolha — o do artdeco):
@@ -3631,10 +3715,10 @@
           String((campo.getAttribute && campo.getAttribute('contenteditable')) || '') === 'true'
         ) {
           // Texto de verdade (input/textarea/contenteditable): escreve e avisa o
-          // React do LinkedIn.
+          // React do LinkedIn — `fireFieldEvents` manda `input`, `change` e `blur`
+          // (o `blur` é o que faz o LinkedIn validar e habilitar o "Avançar").
           setNativeValue(campo, valor);
-          campo.dispatchEvent(new Event('input', { bubbles: true }));
-          campo.dispatchEvent(new Event('change', { bubbles: true }));
+          fireFieldEvents(campo);
           aplicados += 1;
         }
         /* Qualquer outro elemento (div/bloco) NÃO conta como aplicado: é melhor
@@ -3642,6 +3726,29 @@
          * vaivém (o `resolverComAjuda` transforma isso no desfecho honesto). */
       } catch (error) {
         /* campo não reagiu: segue para o próximo */
+      }
+
+      /* Uma linha por resposta do cartão: o que aconteceu com CADA uma (aplicada ou
+       * não, e em que controle ela caiu). É o log que responde "por que o select não
+       * preencheu?" sem precisar adivinhar. */
+      console.log(
+        '[PegaVaga] "' +
+          rotulo +
+          '": ' +
+          (aplicados > antes ? 'aplicado' : 'NAO aplicado') +
+          ' ' +
+          diagnosticoDoCampo(campo)
+      );
+    }
+
+    /* Deixa o LinkedIn digerir o preenchimento (revalidar a etapa, reabilitar o
+     * "Avançar") antes de quem chamou tentar o próximo passo — é o que o caminho
+     * antigo de preenchimento também fazia (`fillPendingFields`). Sem essa pausa o
+     * clique no "Avançar" podia sair antes de o LinkedIn registrar a resposta. */
+    if (aplicados) {
+      const deadline = Date.now() + CONFIG.applyModalPollMs * 3;
+      while (Date.now() < deadline) {
+        if (await waitForQuiet(Math.min(CONFIG.applyQuietMs, deadline - Date.now()))) break;
       }
     }
 
