@@ -3462,17 +3462,36 @@
         if (normalizar(fieldLabel(el) || '').indexOf(alvoPergunta) >= 0) return el;
       }
 
-      // 3) O BLOCO da pergunta: quando o controle não é um campo reconhecível, o
-      //    alvo é o bloco — e o chamador desce até o controle que estiver dentro
-      //    dele (ver `aplicarRespostaNosCampos`).
+      /* 3) O BLOCO da pergunta — devolvendo o CONTROLE de dentro dele, e só quando
+       *    o bloco é o de UMA pergunta.
+       *
+       *    Cuidado que custou caro: o `<fieldset>` da ETAPA inteira também "contém"
+       *    a pergunta (contém todas). Devolvê-lo fazia o chamador descer para o
+       *    PRIMEIRO controle dele — que é o da primeira pergunta da etapa. A
+       *    resposta ia para o campo ERRADO: o select do LinkedIn continuava vazio e
+       *    o cartão voltava a pedir, num vaivém. */
       for (const bloco of queryAllUnique(
         '.fb-dash-form-element, .jobs-easy-apply-form-element, fieldset',
         modal
       )) {
         if (!isVisible(bloco)) continue;
-        if (normalizar(fieldLabel(bloco) || bloco.textContent).indexOf(alvoPergunta) >= 0) {
-          return bloco;
-        }
+        if (normalizar(fieldLabel(bloco) || bloco.textContent).indexOf(alvoPergunta) < 0) continue;
+
+        const controles = queryAllProfundo(
+          'select, input:not([type="hidden"]), textarea, [role="combobox"], [role="radio"], ' +
+            '[aria-haspopup], [aria-expanded]',
+          bloco
+        ).filter(isVisible);
+
+        if (controles.length === 1) return controles[0]; // bloco de UMA pergunta
+
+        // Vários controles: só serve se forem o mesmo grupo de rádio/check.
+        const radios = controles.filter(
+          (el) => String(el.type || '').toLowerCase() === 'radio' || ehRadioCustom(el)
+        );
+        if (radios.length && radios.length === controles.length) return radios[0];
+
+        continue; // bloco de várias perguntas: tenta um bloco menor
       }
 
       // 4) No DOCUMENTO, restrito ao formulário de candidatura: o conteúdo do
@@ -3514,22 +3533,46 @@
 
       if (!campo) continue;
 
-      /* O alvo pode ser o BLOCO da pergunta (quando o controle não é um campo
-       * reconhecível — ver `camposPorPergunta`): desce até o controle de verdade
-       * que estiver dentro dele antes de escrever. */
+      /* O alvo pode ser o BLOCO da pergunta: desce até o controle de verdade — mas
+       * SÓ quando o bloco é o de UMA pergunta. Num bloco com vários controles (a
+       * etapa inteira) escrever no primeiro deles punha a resposta no campo ERRADO,
+       * e era isso que deixava o select do LinkedIn vazio e o cartão voltando a
+       * pedir. Não dá para saber onde escrever: melhor não chutar. */
       const tagAlvo = String(campo.tagName || '').toLowerCase();
-      if (
-        tagAlvo !== 'input' &&
-        tagAlvo !== 'select' &&
-        tagAlvo !== 'textarea' &&
-        !ehCombo(campo)
-      ) {
-        const dentro = campo.querySelector(
-          '[role="combobox"], [aria-haspopup], [aria-expanded], input[readonly], ' +
-            'input:not([type="hidden"]), select, textarea'
+      const ehControle =
+        tagAlvo === 'input' ||
+        tagAlvo === 'select' ||
+        tagAlvo === 'textarea' ||
+        ehCombo(campo) ||
+        ehRadioCustom(campo) ||
+        String((campo.getAttribute && campo.getAttribute('contenteditable')) || '') === 'true';
+
+      if (!ehControle) {
+        const controles = queryAllProfundo(
+          'select, input:not([type="hidden"]), textarea, [role="combobox"], [role="radio"], ' +
+            '[aria-haspopup], [aria-expanded], input[readonly]',
+          campo
+        ).filter(isVisible);
+
+        const radios = controles.filter(
+          (el) => String(el.type || '').toLowerCase() === 'radio' || ehRadioCustom(el)
         );
-        if (dentro) campo = dentro;
+
+        if (controles.length === 1) campo = controles[0];
+        else if (radios.length && radios.length === controles.length) campo = radios[0];
+        else {
+          console.warn(
+            '[PegaVaga] nao achei onde escrever a resposta de "' +
+              rotulo +
+              '" (o bloco tem ' +
+              controles.length +
+              ' controles); seguindo sem chutar.'
+          );
+          campo = null;
+        }
       }
+
+      if (!campo) continue;
 
       const tag = String(campo.tagName || '').toLowerCase();
       const type = String(campo.type || '').toLowerCase();
@@ -3582,13 +3625,21 @@
             }
             aplicados += 1;
           }
-        } else {
-          // Texto (input/textarea): escreve e avisa o React do LinkedIn.
+        } else if (
+          tag === 'input' ||
+          tag === 'textarea' ||
+          String((campo.getAttribute && campo.getAttribute('contenteditable')) || '') === 'true'
+        ) {
+          // Texto de verdade (input/textarea/contenteditable): escreve e avisa o
+          // React do LinkedIn.
           setNativeValue(campo, valor);
           campo.dispatchEvent(new Event('input', { bubbles: true }));
           campo.dispatchEvent(new Event('change', { bubbles: true }));
           aplicados += 1;
         }
+        /* Qualquer outro elemento (div/bloco) NÃO conta como aplicado: é melhor
+         * dizer que não deu do que fingir que preencheu e ficar pedindo de novo no
+         * vaivém (o `resolverComAjuda` transforma isso no desfecho honesto). */
       } catch (error) {
         /* campo não reagiu: segue para o próximo */
       }
@@ -3619,10 +3670,13 @@
       // seguir. Devolve `continuar` para quem chamou tentar o próximo passo.
       const aplicados = await aplicarRespostaNosCampos(modal, decisao.resposta);
 
-      /* Nada foi escrito e o formulário já saiu da tela: não há o que continuar
-       * (e pedir de novo abriria uma janelinha EM BRANCO, porque os campos não
-       * existem mais). Devolve o desfecho honesto e a varredura segue. */
-      if (!aplicados && (!modal || !document.contains(modal))) {
+      /* Nada foi escrito: ou não achamos ONDE escrever, ou o formulário já saiu da
+       * tela. Não finge que deu certo — devolve o desfecho honesto em vez de voltar
+       * a pedir e ficar no vaivém (era o "o cartão fica voltando a pedir"). */
+      if (!aplicados) {
+        console.warn(
+          '[PegaVaga] nenhuma resposta do cartao pode ser escrita no formulario; a vaga segue como incompleta.'
+        );
         return { status: 'incompleta' };
       }
 
