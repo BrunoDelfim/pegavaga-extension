@@ -24,7 +24,11 @@ da build).
   (`chrome-headless-shell`), conferindo o que ENTROU no formulário — inclusive os
   eventos (`input`/`change`/`blur`) e a hora de recarregar a página. É o teste que
   pega a classe de bug que só aparece com LAYOUT (quem decide o que é "visível" é o
-  `getClientRects`, que só responde dentro de um browser). O browser vem de
+  `getClientRects`, que só responde dentro de um browser). São 22 verificações:
+  select escondido, rádio sem `name`, rádio custom (`role="radio"`), combobox
+  custom (`role="combobox"`), campo de texto, casamento de opção ignorando
+  caixa/acento, o rótulo que não bate (rede do campo único) e a hora de recarregar.
+  O browser vem de
   `tools/baixar-chromium.sh` (uma vez, ~120 MB, sem root, sem npm); sem ele o teste
   se pula sozinho e a suíte segue verde.
 - **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código

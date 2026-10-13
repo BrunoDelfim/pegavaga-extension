@@ -356,11 +356,25 @@
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  /**
+   * O primeiro elemento que casa com QUALQUER um dos seletores (na ordem dada).
+   *
+   * Como o `queryAllUnique`, aceita um ARRAY de seletores — e também uma STRING,
+   * tratada como UM seletor: iterar uma string devolveria os CARACTERES, e o
+   * `querySelector` iria procurar `<i>`, `<n>`, `<p>`… (o resultado errado, calado).
+   */
   function queryFirst(selectors, root = document) {
-    for (const selector of selectors) {
-      const el = root.querySelector(selector);
-      if (el) return el;
+    const lista = Array.isArray(selectors) ? selectors : [selectors];
+
+    for (const selector of lista) {
+      try {
+        const el = root.querySelector(selector);
+        if (el) return el;
+      } catch (error) {
+        /* seletor inválido: tenta o próximo */
+      }
     }
+
     return null;
   }
 

@@ -131,6 +131,28 @@ const html = `<!doctype html>
     </div>
   </div>
 
+  <div class="fb-dash-form-element" id="bloco-combo">
+    <span class="fb-dash-form-element__label">Qual é o seu nível de inglês?</span>
+    <div role="combobox" aria-haspopup="listbox" aria-expanded="false" tabindex="0" id="combo-ingles">
+      <span>Selecionar opção</span>
+    </div>
+    <div role="listbox" hidden>
+      <div role="option" data-value="basico">Básico</div>
+      <div role="option" data-value="avancado">Avançado</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="jobs-easy-apply-modal" id="modal-sozinho" role="dialog">
+  <div class="fb-dash-form-element" id="bloco-sozinho">
+    <span class="fb-dash-form-element__label">Pergunta que chegou ao cartao com outro texto</span>
+    <select id="sel-sozinho" required>
+      <option value="">Selecionar opção</option>
+      <option value="a">Opção A</option>
+      <option value="b">Opção B</option>
+    </select>
+  </div>
 </div>
 
 <pre id="pgv-saida"></pre>
@@ -189,6 +211,34 @@ const html = `<!doctype html>
     Array.prototype.forEach.call(grupo.querySelectorAll('[role="radio"]'), function (opcao) {
       opcao.setAttribute('aria-checked', opcao === alvo ? 'true' : 'false');
     });
+  });
+
+  // E o combobox custom: clicar no gatilho ABRE a lista, clicar na opção fecha e
+  // mostra a escolha no gatilho (é o que o artdeco faz).
+  document.addEventListener('click', function (ev) {
+    var alvo = ev.target && ev.target.closest ? ev.target.closest('[role="combobox"], [role="option"]') : null;
+    if (!alvo) return;
+
+    if (alvo.getAttribute('role') === 'combobox') {
+      var bloco = alvo.closest('.fb-dash-form-element');
+      var lista = bloco && bloco.querySelector('[role="listbox"]');
+      if (lista) {
+        lista.removeAttribute('hidden');
+        alvo.setAttribute('aria-expanded', 'true');
+      }
+      return;
+    }
+
+    var listaFechar = alvo.closest('[role="listbox"]');
+    var blocoCombo = alvo.closest('.fb-dash-form-element');
+    var gatilho = blocoCombo && blocoCombo.querySelector('[role="combobox"]');
+
+    if (gatilho) {
+      var texto = gatilho.querySelector('span') || gatilho;
+      texto.textContent = alvo.textContent;
+      gatilho.setAttribute('aria-expanded', 'false');
+    }
+    if (listaFechar) listaFechar.setAttribute('hidden', '');
   });
 
   var saida = document.getElementById('pgv-saida');

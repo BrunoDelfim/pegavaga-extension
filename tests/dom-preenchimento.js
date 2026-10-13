@@ -24,6 +24,14 @@
     saida.textContent += 'FIM\n';
   };
 
+  /** Texto de um nó, sem espaços sobrando (só para comparar no teste). */
+  function cleanTexto(texto) {
+    return String(texto || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   if (!T) {
     ok('o gancho de teste do content.js existe', false, 'window.__pgvTeste nao foi publicado');
     terminar();
@@ -174,7 +182,67 @@
     );
 
     /* ---------------------------------------------------------------------- */
-    /* 6) O RELOAD: com formulário aberto, a troca de termo espera             */
+    /* 6) O combo custom (`role="combobox"`): abre a lista e clica na opção    */
+    /* ---------------------------------------------------------------------- */
+
+    const combo = document.getElementById('combo-ingles');
+    const perguntaCombo = 'Qual é o seu nível de inglês?';
+
+    ok(
+      'leu as opcoes do combobox custom',
+      T.camposTravados(modal).some(
+        (c) => c.tipo === 'select' && (c.opcoes || []).join('/') === 'Básico/Avançado'
+      ),
+      JSON.stringify(T.camposTravados(modal).map((c) => c.tipo + ':' + (c.opcoes || []).join('/')))
+    );
+
+    const respostaCombo = {};
+    respostaCombo[perguntaCombo] = 'Avançado';
+
+    const aplicadosCombo = await T.aplicarRespostaNosCampos(modal, respostaCombo);
+
+    ok(
+      'escolheu a opcao no combobox custom',
+      aplicadosCombo === 1 && cleanTexto(combo.textContent) === 'Avançado',
+      'aplicados=' + aplicadosCombo + ' texto=' + cleanTexto(combo.textContent)
+    );
+
+    /* ---------------------------------------------------------------------- */
+    /* 7) A opção casando com caixa/acento diferente do que veio do cartão     */
+    /* ---------------------------------------------------------------------- */
+
+    const respostaMinuscula = {};
+    respostaMinuscula[perguntaSelect] = 'yes'; // no LinkedIn a opção é "YES"
+
+    const aplicadosCaixa = await T.aplicarRespostaNosCampos(modal, respostaMinuscula);
+
+    ok(
+      'casa a opcao ignorando caixa e acento',
+      aplicadosCaixa === 1 && String(sel.value) === 'yes',
+      'aplicados=' + aplicadosCaixa + ' valor=' + String(sel.value)
+    );
+
+    /* ---------------------------------------------------------------------- */
+    /* 8) A rede do CAMPO ÚNICO: rótulo que não bate com nada                  */
+    /* ---------------------------------------------------------------------- */
+
+    const sozinho = document.getElementById('sel-sozinho');
+    const respostaFora = {};
+    respostaFora['Um rotulo que nao existe no formulario'] = 'Opção B';
+
+    const aplicadosSozinho = await T.aplicarRespostaNosCampos(
+      document.getElementById('modal-sozinho'),
+      respostaFora
+    );
+
+    ok(
+      'achou o unico campo sem resposta quando o rotulo nao bate',
+      aplicadosSozinho === 1 && String(sozinho.value) === 'b',
+      'aplicados=' + aplicadosSozinho + ' valor=' + String(sozinho.value)
+    );
+
+    /* ---------------------------------------------------------------------- */
+    /* 9) O RELOAD: com formulário aberto, a troca de termo espera             */
     /* ---------------------------------------------------------------------- */
 
     ok('nao recarrega com o formulario de candidatura aberto', T.podeRecarregar() === false);
