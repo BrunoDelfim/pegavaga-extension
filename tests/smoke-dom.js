@@ -70,6 +70,15 @@ C.montarPagina({
     </div>
   </div>
 
+  <div class="fb-dash-form-element" id="bloco-nivel">
+    <span class="fb-dash-form-element__label">Qual seu nível de proficiência em Inglês?</span>
+    <select id="sel-nivel">
+      <option value="0" selected>Básico</option>
+      <option value="1">Intermediário</option>
+      <option value="2">Avançado</option>
+    </select>
+  </div>
+
 </div>
 
 <div class="jobs-easy-apply-modal" id="modal-sozinho" role="dialog">

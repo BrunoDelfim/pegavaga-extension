@@ -2743,13 +2743,24 @@
        *
        * Preferimos o controle que está SEM resposta (`jaRespondido`), porque um
        * bloco pode conter mais de um. */
-      const candidatos = queryAllProfundo(
+      const controles = queryAllProfundo(
         'select, input:not([type="hidden"]), textarea, [role="radio"], [role="combobox"], ' +
           '[aria-haspopup], [aria-expanded], input[readonly]',
         bloco
-      ).filter((el) => !jaRespondido(el));
+      );
 
-      const controle = candidatos[0] || bloco;
+      const candidatos = controles.filter((el) => !jaRespondido(el));
+
+      /* O alvo é o CONTROLE, nunca o bloco — e o sem resposta vem primeiro.
+       *
+       * Devolver o bloco perdia o TIPO do campo: o `<select>` de "Qual seu nível de
+       * proficiência em Inglês" (que o LinkedIn já entrega com uma opção marcada e
+       * por isso NÃO conta como "sem resposta") chegava ao cartão como campo de
+       * TEXTO — e o que você digitasse nunca entraria no `<select>`. Era o "select
+       * veio como text input". Com UM controle no bloco, é ele; com vários, o
+       * primeiro sem resposta e, sem nenhum, o primeiro (melhor um controle do que
+       * uma `div`). */
+      const controle = candidatos[0] || controles[0] || bloco;
       const descricao = descreverCampo(controle, modal);
 
       saida.push({

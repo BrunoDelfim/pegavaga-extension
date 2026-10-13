@@ -66,6 +66,12 @@
       resumo.join(' || ')
     );
 
+    ok(
+      'o select COM opcao ja marcada ainda vem como select, com as opcoes',
+      resumo.some((r) => r.indexOf('select [Básico/Intermediário/Avançado]') === 0),
+      resumo.join(' || ')
+    );
+
     /* ---------------------------------------------------------------------- */
     /* 2) O rádio nativo, sem `name`, com cada bolinha no seu container        */
     /* ---------------------------------------------------------------------- */
