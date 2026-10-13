@@ -95,7 +95,12 @@
    * barra de título e borda, que só existem para fora da página.
    */
   async function ajustarAltura() {
-    if (!chrome.windows || typeof chrome.windows.update !== 'function') return;
+    if (!chrome.windows || typeof chrome.windows.update !== 'function') {
+      console.warn(
+        '[PegaVaga] sem a API de janelas: nao da para ajustar a altura (falta a permissao "windows" no manifesto?).'
+      );
+      return;
+    }
 
     const cartao = document.getElementById('cartao');
     const corpo = document.querySelector('.corpo');
@@ -401,6 +406,14 @@
     });
 
     if (controles.length && controles[0].el) controles[0].el.focus();
+
+    /* Segunda passada do tamanho/posição, no FIM (os botões já estão ligados): alguns
+     * gerenciadores de janelas reposicionam uma janela nova DEPOIS de ela aparecer
+     * (o "smart placement" do sistema), desfazendo a nossa posição. Reaplicar logo
+     * depois resolve — e é barato. */
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await ajustarAltura();
+    await posicionar();
   }
 
   iniciar().catch(() => {});

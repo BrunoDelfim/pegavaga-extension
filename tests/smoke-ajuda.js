@@ -375,6 +375,21 @@ async function principal() {
   );
   ok('id de fora devolve null', S.lerAjudaId('x:y') === null && S.lerAjudaId(null) === null);
 
+  /* O MANIFESTO: sem a permissão `windows` o Chrome IGNORA o `type: 'popup'`, o
+   * posicionamento e o redimensionamento da janelinha — e o sintoma é o que o
+   * usuário viu: janela normal (com barra de endereço e extensões), no lugar que o
+   * sistema quer e no tamanho de criação. O código pede tudo certo; quem autoriza é
+   * o manifesto. */
+  console.log('== o manifesto dá o que a janelinha precisa ==');
+  const manifesto = JSON.parse(fs.readFileSync(path.join(raiz, 'manifest.json'), 'utf8'));
+  const permissoes = Array.isArray(manifesto.permissions) ? manifesto.permissions : [];
+
+  ok(
+    'a permissao `windows` esta no manifesto (popup, posicao e tamanho)',
+    permissoes.indexOf('windows') >= 0,
+    JSON.stringify(permissoes)
+  );
+
   finalizar();
 }
 
