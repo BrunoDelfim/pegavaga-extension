@@ -1,5 +1,23 @@
 # PegaVaga — Extensão do Chrome (Manifest V3)
 
+> ## ⏸️ PROJETO PAUSADO — é um protótipo, pode não funcionar 100%
+>
+> O desenvolvimento parou para tocar outros projetos (a marca está na tag
+> [`pausada-para-outros-projetos`](https://github.com/BrunoDelfim/pegavaga-extension/tree/pausada-para-outros-projetos)).
+> Se você clonou isto pensando num produto pronto: **espere arestas**. O que roda
+> hoje foi verificado por uma suíte de testes de verdade (10 suítes, com testes de
+> DOM em Chromium), mas **não conte com suporte nem correções** por enquanto.
+>
+> A aresta mais visível é a **moldura da janelinha do pedido de ajuda**: ela pede uma
+> janela `popup` (sem barra de endereço), e quem decide isso é o gerenciador de
+> janelas do sistema — no Wayland, por exemplo, o Chrome ignora o tipo e a posição
+> pedidos. O resto (varrer as buscas, se candidatar, preencher o formulário da
+> Candidatura Simplificada) é o que está mais sólido.
+>
+> O retrato honesto do estado está no [CHANGELOG](CHANGELOG.md) — o que foi feito e
+> o que ficou aberto. E o plano daqui para frente **não** é terminar este sistema
+> agora: é uma versão liberada que salva tudo **local**, para divulgar o trabalho.
+
 [![testes](https://github.com/BrunoDelfim/pegavaga-extension/actions/workflows/testes.yml/badge.svg)](https://github.com/BrunoDelfim/pegavaga-extension/actions/workflows/testes.yml)
 
 Extensão para automatizar o rastreamento **e as candidaturas** no LinkedIn:
