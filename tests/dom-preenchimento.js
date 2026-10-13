@@ -72,6 +72,18 @@
       resumo.join(' || ')
     );
 
+    ok(
+      'o radio SEM rotulo nas opcoes usa o `value` (Yes/No)',
+      resumo.some((r) => r.indexOf('radio [Yes/No]') === 0 && r.indexOf('CNH') >= 0),
+      resumo.join(' || ')
+    );
+
+    ok(
+      'radio ja respondido, com botao no bloco, NAO vira texto',
+      resumo.some((r) => r.indexOf('radio [Yes/No]') === 0 && r.indexOf('equipes remotas') >= 0),
+      resumo.join(' || ')
+    );
+
     /* ---------------------------------------------------------------------- */
     /* 2) O rádio nativo, sem `name`, com cada bolinha no seu container        */
     /* ---------------------------------------------------------------------- */
@@ -98,6 +110,19 @@
       'marcou a opcao escolhida do radio',
       aplicadosRadio === 1 && r2.checked === true && r1.checked === false,
       'aplicados=' + aplicadosRadio + ' r2=' + r2.checked + ' r1=' + r1.checked
+    );
+
+    /* O mesmo grupo respondido no OUTRO idioma: "Sim" tem de marcar o "Yes". */
+    const respostaCnh = {};
+    respostaCnh['Você possui CNH categoria B?'] = 'Sim';
+
+    const aplicadosCnh = await T.aplicarRespostaNosCampos(modal, respostaCnh);
+    const cnhMarcada = document.getElementById('cnh-y');
+
+    ok(
+      '"Sim" responde um campo cujas opcoes sao "Yes"/"No"',
+      aplicadosCnh === 1 && cnhMarcada.checked === true,
+      'aplicados=' + aplicadosCnh + ' marcado=' + cnhMarcada.checked
     );
 
     /* ---------------------------------------------------------------------- */

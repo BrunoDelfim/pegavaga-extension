@@ -70,6 +70,23 @@ C.montarPagina({
     </div>
   </div>
 
+  <div class="fb-dash-form-element" id="bloco-radio-respondido">
+    <span class="fb-dash-form-element__label">Você já trabalhou com equipes remotas?</span>
+    <button type="button" aria-expanded="false" aria-label="Mais informações">?</button>
+    <div class="artdeco-radio-group">
+      <label class="artdeco-radio-button"><input type="radio" name="remoto" id="rem-y" value="Yes" checked> <span>Yes</span></label>
+      <label class="artdeco-radio-button"><input type="radio" name="remoto" id="rem-n" value="No"> <span>No</span></label>
+    </div>
+  </div>
+
+  <div class="fb-dash-form-element" id="bloco-cnh">
+    <span class="fb-dash-form-element__label">Você possui CNH categoria B?</span>
+    <div class="artdeco-radio-group">
+      <div><input type="radio" name="cnh" id="cnh-y" value="Yes"></div>
+      <div><input type="radio" name="cnh" id="cnh-n" value="No"></div>
+    </div>
+  </div>
+
   <div class="fb-dash-form-element" id="bloco-nivel">
     <span class="fb-dash-form-element__label">Qual seu nível de proficiência em Inglês?</span>
     <select id="sel-nivel">

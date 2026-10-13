@@ -56,6 +56,21 @@
   const normalizar = AJUDA_CAMPOS.normalizar;
   const escolherOpcao = AJUDA_CAMPOS.escolherOpcao;
 
+  /**
+   * "Sim"/"Yes" e "Não"/"No" são a MESMA resposta.
+   *
+   * O cartão mostra o que o campo entrega (o LinkedIn mistura os idiomas: a
+   * pergunta em português com opções "Yes/No", ou o contrário) — sem esta
+   * equivalência, a resposta escolhida não casava com a opção e o campo ficava sem
+   * preencher. Só vale como ÚLTIMO recurso do casamento, depois do exato/"contém".
+   */
+  function simNao(texto) {
+    const limpo = normalizar(texto);
+    if (/^(sim|yes)$/.test(limpo)) return 'sim';
+    if (/^(nao|no)$/.test(limpo)) return 'nao';
+    return limpo;
+  }
+
   const STORAGE_JOBS_KEY = STORAGE.jobs || 'pegavaga_jobs';
   const STORAGE_META_KEY = STORAGE.meta || 'pegavaga_meta';
   const STORAGE_RUN_KEY = STORAGE.run || 'pegavaga_run';
@@ -2131,6 +2146,30 @@
       return { rotulo, tipo: 'select', opcoes };
     }
 
+    /* ESCOLHA (rádio/checkbox) vem ANTES do ramo de lista: um rádio é escolha com
+     * as opções no grupo, nunca um dropdown. A ordem é a garantia de que o tipo do
+     * campo não é decidido por um sinal de ARIA/texto que o rádio possa imitar. */
+    if (type === 'radio' || ehRadioCustom(campo)) {
+      const grupo = opcoesDoGrupo(campo);
+      const opcoes = grupo
+        .map((el) => rotuloDaOpcao(el) || String(el.value || '') || clean(el.textContent || ''))
+        .map((t) => clean(t))
+        .filter(Boolean);
+
+      /* Sem rótulo nenhum nas opções e a pergunta é de sim/não? O LinkedIn usa
+       * "Yes"/"No" — melhor mostrá-los do que deixar o campo sem escolha. */
+      if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) {
+        return { rotulo, tipo: 'radio', opcoes: ['Sim', 'Não'] };
+      }
+
+      return { rotulo, tipo: 'radio', opcoes };
+    }
+
+    if (type === 'checkbox') {
+      // Binário: marcar ou não. O rótulo costuma ser a pergunta ("Autorizo…").
+      return { rotulo, tipo: 'checkbox', opcoes: ['Sim', 'Não'] };
+    }
+
     /* Combobox/dropdown custom do Easy Apply: é uma div/botão que abre uma
      * lista (`listbox`) — sem <select>, então as opções se leem da lista
      * aberta ou dos itens escondidos no DOM. Sai como 'select' para a
@@ -2151,20 +2190,6 @@
       if (!opcoes.length && PERGUNTA_SIM_NAO_RE.test(rotulo)) opcoes = ['Sim', 'Não'];
 
       return { rotulo, tipo: 'select', opcoes };
-    }
-
-    /* Rádio (nativo ou `role="radio"`): as opções são o texto de CADA bolinha do
-     * GRUPO (`opcoesDoGrupo` — todas as da mesma pergunta, mesmo sem `name`, que é o
-     * que fazia o cartão trazer uma opção só por bolinha). */
-    if (type === 'radio' || ehRadioCustom(campo)) {
-      const grupo = opcoesDoGrupo(campo);
-      const opcoes = grupo.map(rotuloDaOpcao).map((t) => clean(t)).filter(Boolean);
-      return { rotulo, tipo: 'radio', opcoes };
-    }
-
-    if (type === 'checkbox') {
-      // Binário: marcar ou não. O rótulo costuma ser a pergunta ("Autorizo…").
-      return { rotulo, tipo: 'checkbox', opcoes: ['Sim', 'Não'] };
     }
 
     // input/textarea de texto (texto, número, e-mail…).
@@ -2775,16 +2800,28 @@
 
       const candidatos = controles.filter((el) => !jaRespondido(el));
 
-      /* O alvo é o CONTROLE, nunca o bloco — e o sem resposta vem primeiro.
+      /* O controle que REPRESENTA a pergunta. A ordem: sinal FORTE de escolha
+       * (rádio/checkbox/`<select>`/`role="combobox"`/`aria-haspopup="listbox"`) sem
+       * resposta → sinal forte → controle sem resposta → qualquer controle → bloco.
        *
-       * Devolver o bloco perdia o TIPO do campo: o `<select>` de "Qual seu nível de
-       * proficiência em Inglês" (que o LinkedIn já entrega com uma opção marcada e
-       * por isso NÃO conta como "sem resposta") chegava ao cartão como campo de
-       * TEXTO — e o que você digitasse nunca entraria no `<select>`. Era o "select
-       * veio como text input". Com UM controle no bloco, é ele; com vários, o
-       * primeiro sem resposta e, sem nenhum, o primeiro (melhor um controle do que
-       * uma `div`). */
-      const controle = candidatos[0] || controles[0] || bloco;
+       * Botões com `aria-expanded` são sinal FRACO de propósito: o LinkedIn usa
+       * `<button aria-expanded>` para o dropdown custom (ver `ehCombo`), mas também
+       * para um "?" de ajuda DENTRO do bloco da pergunta — e, vindo primeiro, ele
+       * tomava o lugar do campo. Era o rádio chegando ao cartão como TEXTO, com as
+       * opções de OUTRO campo (o "Mais informações" com as opções do vizinho). */
+      const atributo = (el, nome) =>
+        String((el.getAttribute && el.getAttribute(nome)) || '').toLowerCase();
+
+      const fortes = controles.filter(
+        (el) =>
+          ehOpcaoDeEscolha(el) ||
+          String(el.tagName || '').toLowerCase() === 'select' ||
+          atributo(el, 'role') === 'combobox' ||
+          atributo(el, 'aria-haspopup') === 'listbox'
+      );
+
+      const candidatoForte = candidatos.filter((el) => fortes.indexOf(el) >= 0);
+      const controle = candidatoForte[0] || fortes[0] || candidatos[0] || controles[0] || bloco;
       const descricao = descreverCampo(controle, modal);
 
       saida.push({
@@ -3324,6 +3361,14 @@
 
   /** É uma pergunta de lista? (sinal de ARIA OU o placeholder no texto) */
   function ehPerguntaDeLista(campo) {
+    /* RÁDIO/CHECKBOX **nunca** é lista: é escolha com as opções no próprio grupo.
+     *
+     * Sem esta guarda, um rádio cujo `value` parece placeholder (`textoEhPlaceholderDeLista`
+     * olha o `value` dos inputs) era classificado como dropdown: o cartão recebia
+     * `tipo: 'select'` com as opções de uma lista que não existe (`[]`) — e, sem
+     * opções, o cartão desenha um **input de texto**. Era o "o rádio veio com input". */
+    if (ehOpcaoDeEscolha(campo)) return false;
+
     return ehCombo(campo) || textoEhPlaceholderDeLista(campo);
   }
 
@@ -3845,7 +3890,10 @@
           const opcao =
             opcoes.find((o) => normalizar(o.textContent) === alvoOpcao) ||
             opcoes.find((o) => normalizar(o.textContent).indexOf(alvoOpcao) >= 0) ||
-            opcoes.find((o) => normalizar(o.value) === alvoOpcao);
+            opcoes.find((o) => normalizar(o.value) === alvoOpcao) ||
+            /* Último recurso: "Sim" responde um "Yes" (ver `simNao`). */
+            opcoes.find((o) => simNao(o.textContent) === simNao(alvoOpcao)) ||
+            opcoes.find((o) => simNao(o.value) === simNao(alvoOpcao));
 
           if (opcao) {
             const alvoValor = String(opcao.value);
@@ -3919,7 +3967,12 @@
 
           const alvo =
             grupo.find((f) => normalizar(rotuloDaOpcao(f)) === alvoOpcao) ||
-            grupo.find((f) => normalizar(rotuloDaOpcao(f)).indexOf(alvoOpcao) >= 0);
+            grupo.find((f) => normalizar(rotuloDaOpcao(f)).indexOf(alvoOpcao) >= 0) ||
+            grupo.find((f) => normalizar(String(f.value || '')) === alvoOpcao) ||
+            /* Último recurso: "Sim" responde um "Yes" (e vice-versa). O cartão
+             * pode ter mostrado o outro idioma (ver `simNao`). */
+            grupo.find((f) => simNao(rotuloDaOpcao(f)) === simNao(alvoOpcao)) ||
+            grupo.find((f) => simNao(String(f.value || '')) === simNao(alvoOpcao));
 
           if (alvo) {
             const clicavel = (alvo.labels && alvo.labels[0]) || alvo;
