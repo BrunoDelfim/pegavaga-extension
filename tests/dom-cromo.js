@@ -28,6 +28,7 @@ const raiz = path.join(__dirname, '..');
 let falhas = 0;
 let total = 0;
 let pagina = ''; // nasce no /tmp (dentro de jobs/, ver abaixo) e é apagada no fim
+const temporarias = []; // cada página montada (o teste de fixtures monta várias)
 
 /** O Chrome de teste: `PGV_CHROME`, ou o que o `baixar-chromium.sh` deixou. */
 function acharChromium() {
@@ -73,10 +74,12 @@ function pular() {
 }
 
 function finalizar(resumo) {
-  try {
-    if (pagina) fs.rmSync(path.dirname(path.dirname(pagina)), { recursive: true, force: true });
-  } catch (error) {
-    /* o /tmp se limpa sozinho */
+  for (const dir of temporarias) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      /* o /tmp se limpa sozinho */
+    }
   }
 
   console.log(falhas ? '\n' + falhas + '/' + total + ' FALHARAM' : '\n' + resumo.replace('%d', total));
@@ -252,7 +255,10 @@ const CHROME_FALSO = `
  * `isUsablePage`), e é assim que a fila é retomada em vez de descartada.
  */
 function montarPagina(opcoes) {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pgv-dom-')), 'jobs', 'search');
+  const raizTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pgv-dom-'));
+  const dir = path.join(raizTmp, 'jobs', 'search');
+
+  temporarias.push(raizTmp);
 
   fs.mkdirSync(dir, { recursive: true });
   pagina = path.join(dir, 'pagina.html');
@@ -264,7 +270,7 @@ function montarPagina(opcoes) {
   fs.writeFileSync(
     pagina,
     `<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>PegaVaga - teste de DOM</title></head>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>PegaVaga - ${opcoes.titulo || 'etapa'}</title></head>
 <body>
 ${opcoes.corpo}
 <pre id="pgv-saida"></pre>

@@ -2338,8 +2338,14 @@
         modal
       )) {
         if (vistos.length >= TETO) break;
-        if (!isVisible(el) || el.disabled) continue;
-        if (el.value != null && String(el.value).trim() !== '') continue;
+        if (!visivelOuControle(el) || el.disabled) continue;
+
+        /* `jaRespondido`, e NÃO `el.value`: o placeholder do `<select>` do LinkedIn
+         * vem com TEXTO **e VALOR** ("Selecionar opção" — ver o HTML real em
+         * `tests/fixtures/linkedin-etapa-select.html`), e comparar só o `value` dava
+         * o campo como respondido. Era isso que fazia o select sumir do cartão (e,
+         * sem outra via, chegar como campo de TEXTO). */
+        if (jaRespondido(el)) continue;
         anotar(el);
       }
 

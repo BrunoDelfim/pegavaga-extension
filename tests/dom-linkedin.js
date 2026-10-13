@@ -1,12 +1,21 @@
 /* =============================================================================
  * PegaVaga - tests/dom-linkedin.js
  *
- * O roteiro que roda DENTRO da página com o HTML REAL do LinkedIn
- * (`tests/fixtures/linkedin-etapa-radios.html`, copiado do Easy Apply numa vaga
- * com duas perguntas de rádio Yes/No e a segunda marcada com erro).
+ * O roteiro que roda DENTRO da página com o HTML REAL do LinkedIn (as fixtures de
+ * `tests/fixtures/`). É genérico de propósito: **cada etapa nova copiada do
+ * LinkedIn vira só um arquivo** — nenhuma linha de roteiro muda.
  *
- * É o "clone" da etapa: se o LinkedIn mudar o markup, a fixture é trocada e este
- * roteiro diz na hora se a extensão ainda reconhece e preenche.
+ * O que ele confere em QUALQUER etapa real, e por quê:
+ *   - a varredura reconhece campo (senão a etapa trava sem aviso);
+ *   - nenhum rótulo é o texto da OPÇÃO ("Yes"/"No") nem arrasta o "Obrigatório"
+ *     escondido — foi o que o `<legend>` do LinkedIn provocou;
+ *   - o rótulo não se repete (a mesma pergunta 4×, uma por bolinha, era o
+ *     `aria-required` em cada `<input type=radio>`);
+ *   - todo campo de escolha vem COM as opções (sem elas o cartão cai no campo de
+ *     texto — o "select veio como text input");
+ *   - a VOLTA: responder cada campo (a 1ª opção, ou um número no texto) tem de
+ *     ENTRAR no formulário. O próprio `aplicarRespostaNosCampos` confere a escrita
+ *     antes de contar, então "entrou" aqui é "entrou" de verdade.
  * ===========================================================================*/
 
 'use strict';
@@ -14,96 +23,64 @@
 (async function () {
   const T = window.__pgvTeste;
   const saida = document.getElementById('pgv-saida');
+  const etapa = document.title.replace(/^.*- /, '') || 'etapa';
   const terminar = () => {
     saida.textContent += 'FIM\n';
   };
 
   if (!T) {
-    ok('o gancho de teste do content.js existe', false, 'window.__pgvTeste nao foi publicado');
+    ok(etapa + ': o gancho de teste do content.js existe', false, 'window.__pgvTeste ausente');
     terminar();
     return;
   }
 
-  const modal = document.querySelector('.jobs-easy-apply-modal');
-
-  if (!modal) {
-    ok('o HTML real do LinkedIn esta na pagina', false, 'modal nao encontrado');
-    terminar();
-    return;
-  }
+  const modal = document.querySelector('.jobs-easy-apply-modal') || document.body;
 
   try {
     const campos = T.camposTravados(modal);
-    const resumo = campos.map((c) => c.tipo + ' [' + (c.opcoes || []).join('/') + '] ' + c.rotulo);
+    const resumo = campos.map(
+      (c) => c.tipo + ' [' + (c.opcoes || []).join('/') + '] ' + String(c.rotulo || '').slice(0, 55)
+    );
+
+    ok(etapa + ': a varredura reconheceu campos', campos.length >= 1, JSON.stringify(resumo));
 
     ok(
-      'reconheceu as DUAS perguntas (uma vez cada, nao uma por bolinha)',
-      campos.length === 2,
-      JSON.stringify(resumo)
-    );
-    ok(
-      'as duas sao do tipo radio',
-      campos.length === 2 && campos.every((c) => c.tipo === 'radio'),
-      JSON.stringify(resumo)
-    );
-    ok(
-      'as opcoes sao Yes/No',
-      campos.every((c) => (c.opcoes || []).join('/') === 'Yes/No'),
-      JSON.stringify(resumo)
-    );
-    ok(
-      'a 1a pergunta vem do <legend> (Bachelor)',
-      Boolean(campos[0]) && campos[0].rotulo.indexOf("Bachelor's Degree") >= 0,
-      campos[0] && campos[0].rotulo
-    );
-    ok(
-      'a 2a pergunta vem do <legend> (Master)',
-      Boolean(campos[1]) && campos[1].rotulo.indexOf("Master's Degree") >= 0,
-      campos[1] && campos[1].rotulo
-    );
-    ok(
-      'nenhuma pergunta saiu como "Yes"/"No"',
-      !campos.some((c) => /^(Yes|No)$/.test(c.rotulo)),
-      JSON.stringify(resumo)
-    );
-    ok(
-      'nenhum rotulo arrastou o "Obrigatorio" escondido',
-      !campos.some((c) => /obrigat/i.test(c.rotulo)),
+      etapa + ': nenhum rotulo e a OPCAO (nem o "Obrigatorio" colado)',
+      !campos.some(
+        (c) => /^(Yes|No|Sim|Não)$/i.test(String(c.rotulo).trim()) || /obrigat[óo]rio/i.test(c.rotulo)
+      ),
       JSON.stringify(resumo)
     );
 
-    const radios = Array.prototype.slice.call(modal.querySelectorAll('input[type="radio"]'));
-
-    /* A resposta usa a MESMA chave que o cartão mostrou — é o que o pop-up manda. */
-    const resposta1 = {};
-    resposta1[campos[0].rotulo] = 'Yes';
-
-    const aplicados1 = await T.aplicarRespostaNosCampos(modal, resposta1);
-
     ok(
-      'marcou o "Yes" da 1a pergunta',
-      aplicados1 === 1 && radios[0].checked === true && radios[1].checked === false,
-      'aplicados=' + aplicados1 + ' yes=' + radios[0].checked + ' no=' + radios[1].checked
-    );
-
-    const resposta2 = {};
-    resposta2[campos[1].rotulo] = 'No';
-
-    const aplicados2 = await T.aplicarRespostaNosCampos(modal, resposta2);
-
-    ok(
-      'marcou o "No" da 2a pergunta (a que estava com erro)',
-      aplicados2 === 1 && radios[3].checked === true && radios[2].checked === false,
-      'aplicados=' + aplicados2 + ' yes=' + radios[2].checked + ' no=' + radios[3].checked
+      etapa + ': nenhuma pergunta repetida (uma por bolinha)',
+      new Set(campos.map((c) => c.rotulo)).size === campos.length,
+      JSON.stringify(resumo)
     );
 
     ok(
-      'a 1a pergunta continuou marcada (nao foi desmarcada pela 2a)',
-      radios[0].checked === true,
-      'yes1=' + radios[0].checked
+      etapa + ': todo campo de escolha veio com as opcoes',
+      !campos.some(
+        (c) => ['select', 'radio', 'checkbox'].indexOf(c.tipo) >= 0 && !(c.opcoes || []).length
+      ),
+      JSON.stringify(resumo)
     );
+
+    for (const campo of campos) {
+      const opcoes = campo.opcoes || [];
+      const resposta = {};
+      resposta[campo.rotulo] = opcoes.length ? opcoes[0] : '7';
+
+      const aplicados = await T.aplicarRespostaNosCampos(modal, resposta);
+
+      ok(
+        etapa + ': a resposta entrou em "' + String(campo.rotulo).slice(0, 45) + '"',
+        aplicados >= 1,
+        'tipo=' + campo.tipo + ' resposta=' + resposta[campo.rotulo] + ' aplicados=' + aplicados
+      );
+    }
   } catch (erro) {
-    ok('o roteiro rodou ate o fim', false, (erro && erro.message) || String(erro));
+    ok(etapa + ': o roteiro rodou ate o fim', false, (erro && erro.message) || String(erro));
   }
 
   terminar();

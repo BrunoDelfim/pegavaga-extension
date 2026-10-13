@@ -268,7 +268,42 @@ da build).
   navegação acontece quando o modal fechar.
 - **`falha ao localizar o campo "…"` agora diz QUAL erro** (nome e mensagem, não
   `[object DOMException]`): é esse log que aponta o seletor quebrado no console.
-- **O rádio CUSTOM (`role="radio"`) passou a ser lido** (`opcoesDeRadioCustom`): o
+- **O `<select>` cujo placeholder tem VALOR não vazio sumia** (`jaRespondido`): o
+  LinkedIn entrega `<option value="Selecionar opção">` (texto **e** valor, sem
+  `value=""`), e o laço dos campos obrigatórios comparava só o `value` — o campo
+  era dado como respondido e saía do cartão. Era também o que fazia, sem outra via,
+  a pergunta chegar como campo de TEXTO. Comparar "respondido" passou a ser sempre
+  pelo `jaRespondido` (que já entende o placeholder do `<select>`).
+- **A mesma pergunta saía 4× no cartão** (grupo de rádio): `aria-required="true"`
+  está em **cada** `<input type=radio>` do LinkedIn (ver o HTML real em
+  `tests/fixtures/linkedin-etapa-radios.html`), então o laço dos obrigatórios
+  anotava as quatro bolinhas. `anotar` agora aceita só a PRIMEIRA opção do grupo e
+  nunca duas do mesmo grupo.
+- **O rótulo da pergunta vinha com o "Obrigatório" colado e, em alguns casos, com o
+  texto da OPÇÃO**: a pergunta de rádio mora no `<legend>`, que também carrega o
+  `<span class="visually-hidden">Obrigatório</span>`; e o `<label>` do input é a
+  OPÇÃO ("Yes"). `rotuloDaPerguntaDoGrupo` passa a tentar os rótulos do mais
+  específico para o mais genérico (`.fb-dash-form-element__label` antes do
+  `legend` — um seletor com lista não serve: o `querySelector` devolve o primeiro
+  na ordem do DOCUMENTO), e `rotuloDaOpcao` usa o
+  `data-test-text-selectable-option__input`, que é o texto da opção sem depender de
+  `<label>`/CSS.
+- **O select marca por TIPO de campo, não pelo bloco** (`camposPorPergunta`): a rede
+  de rótulos devolvia o BLOCO quando nenhum controle de dentro contava como "sem
+  resposta" — e o select já vem com uma opção marcada em algumas etapas. Com o
+  bloco no lugar do controle, o cartão perdia o tipo e virava campo de TEXTO (o
+  "select veio como text input"). Agora o alvo é sempre o CONTROLE.
+
+### Adicionado
+
+- **Suíte dirigida por FIXTURES do LinkedIn real** (`tests/smoke-dom-linkedin.js`):
+  cada arquivo em `tests/fixtures/*.html` é uma etapa copiada da página (Copy
+  outerHTML) e roda no Chromium com o `content.js` de verdade. O roteiro é
+  `tests/dom-<nome>.js` quando existe e, senão, o genérico `tests/dom-linkedin.js`,
+  que confere a varredura, o rótulo (nunca a opção), a repetição por bolinha, as
+  opções dos campos de escolha e a VOLTA (a resposta entrando no formulário).
+  **Copiar uma etapa nova do LinkedIn passou a ser só salvar o HTML.**
+- **Build em TypeScript, sem npm** (`src/`, `tools/`, `tsconfig.json`): o código
   artdeco não usa `<input type=radio>` em todas as telas — as opções são
   div/botões com `role="radio"` dentro de um `radiogroup`/`fieldset`. Nada lia
   esse grupo, então a pergunta ia **sem opções** e o cartão (sem opções) virava

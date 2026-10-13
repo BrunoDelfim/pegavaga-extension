@@ -1,0 +1,173 @@
+<!-- =============================================================================
+     PegaVaga - tests/fixtures/linkedin-etapa-select.html
+
+     HTML REAL de uma etapa do Easy Apply (Copy outerHTML), com as duas perguntas
+     que mais deram trabalho:
+
+       1. um `<select>` de sim/não cujo PLACEHOLDER tem VALOR não vazio
+          (`<option value="Selecionar opção">`) — comparar só o `value` dava o campo
+          como respondido e ele sumia do cartão;
+       2. um campo de texto (`artdeco-text-input`) com o `<label>` ao lado — a
+          expectativa salarial, que o LinkedIn recusa se não for número decimal.
+
+     O botão da etapa é "Revisar" (não é envio), e as duas perguntas estão marcadas
+     com `artdeco-inline-feedback--error` ("Insira uma resposta válida" / "Insira um
+     um número de decimal com mais de 0.0").
+
+     Dados pessoais: nenhum (só ids de formulário do LinkedIn e o nome da empresa).
+     ============================================================================= -->
+<div data-test-modal="" role="dialog" tabindex="-1" class="artdeco-modal artdeco-modal--layer-default jobs-easy-apply-modal" size="large" aria-labelledby="jobs-apply-header">
+        <span class="a11y-text">Início do conteúdo do diálogo.</span>
+            <button aria-label="Fechar" id="ember1448" class="artdeco-button artdeco-button--circle artdeco-button--muted artdeco-button--2 artdeco-button--tertiary ember-view artdeco-modal__dismiss" data-test-modal-close-btn="">        <svg role="none" aria-hidden="true" class="artdeco-button__icon " xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-supported-dps="24x24" data-test-icon="close-medium">
+<!---->
+    <use href="#close-medium" width="24" height="24"></use>
+</svg>
+
+
+<span class="artdeco-button__text">
+
+</span></button>
+
+      <div id="ember1449" class="artdeco-modal__header ember-view">
+        <h2 id="jobs-apply-header">
+          Candidate-se na Livelo Brasil
+        </h2>
+
+<!----></div>
+      <div id="ember1450" class="artdeco-modal__content jobs-easy-apply-modal__content p0 ember-view">
+
+    <div class="GAcntcDXfrGlwHxYDxHeyrfMaRSeVKqosSnla" tabindex="-1" aria-label="O andamento da sua candidatura está em 67 porcento." role="region">
+        <div class="display-flex ph5 pv2">
+          <div id="ember1451" class="flex-grow-1 artdeco-completeness-meter-linear ember-view"><div class="artdeco-completeness-meter-linear__progress-container ">
+  <progress max="100" value="67" class="artdeco-completeness-meter-linear__progress-element" aria-valuetext="Valor atual: 67" aria-valuemin="0" aria-valuenow="67" aria-valuemax="100" style="--offset-value: 67%;">
+    Valor atual: 67
+  </progress>
+<!----></div>
+<!----></div>
+          <span class="pl3 t-14 t-black--light" aria-label="O andamento da sua candidatura está em 67 porcento." role="note">
+            67%
+          </span>
+        </div>
+
+      <div>
+
+    <form>
+        <div class="ph5">
+
+    <div class="ahxxQseMCyMeiYlIrKqolilXhOVXWhvGJIhas">
+        <h3 class="t-16 t-bold">
+          Perguntas adicionais
+        </h3>
+<!----><!----><!----><!----><!----><!----><!---->        <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY
+            ">
+
+          <div class="fb-dash-form-element VeHkWaoZkXOlIbhRyxruHbtmFBDFbTsnHo mt1" style="width:100%" tabindex="-1" data-test-form-element="">
+<!---->        <div data-test-text-entity-list-form-component="">
+    <label for="text-entity-list-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438537-multipleChoice" class="fb-dash-form-element__label
+        fb-dash-form-element__label-title--is-required" data-test-text-entity-list-form-title="">
+      <span><!---->Possui disponibilidade ao modelo híbrido em Barueri/SP?<!----></span>
+    </label>
+
+    <span class="visually-hidden" data-test-text-entity-list-form-required="">
+      Obrigatório
+    </span>
+
+  <select id="text-entity-list-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438537-multipleChoice" class="fb-dash-form-element__select-dropdown
+      fb-dash-form-element__error-field" aria-describedby="text-entity-list-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438537-multipleChoice-error" aria-required="true" required="" data-test-text-entity-list-form-select="">
+      <option value="Selecionar opção">
+        Selecionar opção
+      </option>
+      <option value="Yes">
+        Yes
+      </option>
+      <option value="No">
+        No
+      </option>
+  </select>
+
+    <div id="text-entity-list-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438537-multipleChoice-error">
+        <div id="ember1459" class="artdeco-inline-feedback artdeco-inline-feedback--error ember-view mt1" role="alert" data-test-form-element-error-messages="">    <li-icon aria-hidden="true" type="error-pebble-icon" class="artdeco-inline-feedback__icon" size="small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" data-supported-dps="16x16" fill="currentColor" class="mercado-match" width="16" height="16" focusable="false">
+      <path d="M10.8 1H5.2L1 5.2v5.6L5.2 15h5.6l4.2-4.2V5.2zM12 9H4V7h8z"></path>
+    </svg></li-icon>
+
+  <span class="artdeco-inline-feedback__message">
+
+
+<!----><!---->        <div class="LwRCXtiqynrCHidrjaiaLjfzroElIPY
+            ">
+
+          <div class="fb-dash-form-element VeHkWaoZkXOlIbhRyxruHbtmFBDFbTsnHo mt4" style="width:100%" tabindex="-1" data-test-form-element="">
+<!---->        <div data-test-single-line-text-form-component="" data-live-test-single-line-text-form-component="">
+  <div id="ember1455" class="artdeco-text-input artdeco-text-input--type-text artdeco-text-input--color-default artdeco-text-input--state-required ember-view">  <div id="ember1456" class="artdeco-text-input--container ember-view">  <label for="single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438529-numeric" class="artdeco-text-input--label">Qual sua expectativa salarial em uma vaga CLT + Benefícios?</label>
+  <input inputmode="text" class="fb-dash-form-element__error-field artdeco-text-input--input" id="single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438529-numeric" required="" aria-describedby="single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438529-numeric-error" dir="auto" type="text">
+</div>
+<!----><!----></div>
+
+  <div id="single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-4470199483-22121438529-numeric-error">
+        <div id="ember1460" class="artdeco-inline-feedback artdeco-inline-feedback--error ember-view mt1" role="alert" data-test-form-element-error-messages="">    <li-icon aria-hidden="true" type="error-pebble-icon" class="artdeco-inline-feedback__icon" size="small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" data-supported-dps="16x16" fill="currentColor" class="mercado-match" width="16" height="16" focusable="false">
+      <path d="M10.8 1H5.2L1 5.2v5.6L5.2 15h5.6l4.2-4.2V5.2zM12 9H4V7h8z"></path>
+    </svg></li-icon>
+
+  <span class="artdeco-inline-feedback__message">
+
+            <!---->Insira um um número de decimal com mais de 0.0<!---->
+
+<!---->  </span>
+</div>
+</div>
+</div>
+<!---->  </div>
+
+
+        </div>
+    </div>
+
+
+<!---->
+<!---->        </div>
+
+
+    <footer role="presentation">
+<!---->
+      <div class="jobs-easy-apply-footer__info">
+          <p class="t-12 t-black--light">
+            O envio desta candidatura não alterará seu perfil no LinkedIn.
+          </p>
+                  <p class="t-12 t-black--light mt1">
+              Candidatura via LinkedIn. <a href="/help/linkedin/answer/71792?lang=pt_BR" target="_blank" rel="noopener noreferrer" class="link-without-visited-state" data-control-name="help_center_unify" aria-label="Visite a Central de Ajuda para saber mais" data-test-easy-apply-footer-ats-help="true">Central de Ajuda</a>
+          </p>
+      </div>
+      <div class="display-flex justify-flex-end ph5 pv4">
+          <button aria-label="Voltar para etapa anterior" id="ember1457" class="mr2 artdeco-button artdeco-button--2 artdeco-button--tertiary ember-view" type="button"><!---->
+<span class="artdeco-button__text">
+    Voltar
+</span></button>
+
+          <button aria-label="Revise sua candidatura" id="ember1458" class="artdeco-button artdeco-button--2 artdeco-button--primary ember-view" data-live-test-easy-apply-review-button="" type="button"><!---->
+<span class="artdeco-button__text">
+    Revisar
+</span></button>
+      </div>
+    </footer>
+
+    </form>
+
+
+<!---->      </div>
+    </div>
+
+      </div>
+
+        <span class="a11y-text">Término do conteúdo do diálogo.</span>
+      </div>
+
+            <!---->Insira uma resposta válida<!---->
+
+<!---->  </span>
+</div>
+</div>
+</div>
+<!---->  </div>
+
+
+        </div>
