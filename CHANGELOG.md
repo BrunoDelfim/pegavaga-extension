@@ -209,12 +209,28 @@ da build).
   desktop, que aparece por cima de tudo.
 
 - **Testes da janelinha presos à REGRA, não ao número**: o harness passou a simular o
-  redimensionamento de verdade (a página segue a altura da janela, como no Chrome) e
-  a janelinha ganhou três cenários — primeira abertura (canto inferior direito),
-  posição memorizada e **muitos campos** (teto + corpo rolando + botões à vista) —
-  mais o teste do worker conferindo o tamanho compartilhado e a ordem de preferência
-  da posição. Foi assim que o "botão cortado" apareceu e foi corrigido: o teste mede
-  `5px` de margem e "nenhum botão fora da janela", em vez de um 470 fixo.
+  redimensionamento de verdade (a página segue o tamanho da janela — altura E
+  largura, como no Chrome) e a janelinha ganhou três cenários — primeira abertura
+  (canto inferior direito), posição memorizada e **muitos campos** (teto + corpo
+  rolando + botões à vista) — mais o teste do worker conferindo o tamanho
+  compartilhado e a ordem de preferência da posição. Foi assim que o "botão cortado"
+  apareceu e foi corrigido: o teste mede `5px` de margem e "nenhum botão fora da
+  janela", em vez de um 470 fixo. Agora ele confere também que **não há rolagem
+  lateral** (o corpo e o `body` não podem estourar a largura) e que os botões começam
+  **8px depois** do último campo.
+
+- **A janelinha: largura FIXA e sem espaço em branco** (o relato de "a largura mudou"
+  e "o select ficou 30px acima dos botões"). A largura é a da janela (372) e o
+  conteúdo é que se ajusta a ela: os campos usam `box-sizing: border-box` +
+  `max-width: 100%`, e o corpo não rola no eixo X — **some a barra de rolagem
+  lateral**. Ela vinha de um `input` de `width: 100%` com padding e borda somados por
+  fora (8px de estouro) dentro de um corpo com `overflow-y: auto` (que torna o eixo X
+  rolável). E o corpo do cartão **encolhe e rola, nunca cresce** (`flex: 0 1 auto`): o
+  último campo termina onde o corpo termina (sem o padding de baixo) e os botões
+  começam 8px depois — o respiro é do bloco de botões (`padding-top`, que por ser
+  padding entra na conta da altura; `margin` não entraria). Antes sobravam 22px
+  (margem do campo + padding do corpo) e, quando o gerenciador de janelas impunha uma
+  janela mais alta, o corpo esticava e o branco crescia sem limite.
 
 - **O administrador já entra Premium** — o plano dele passou a vir do PAPEL, como já
   vinha o painel: quem administra precisa poder usar o que administra, e exigir

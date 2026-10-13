@@ -56,9 +56,21 @@
       cursor: pointer;
       padding: 0 2px;
     }
-    /* O corpo leva o espaço que sobra e ROLA quando os campos não cabem: é ele que
-     * segura o crescimento, nunca os botões. */
-    .corpo { flex: 1 1 auto; min-height: 0; padding: 12px; overflow-y: auto; }
+    /* O corpo ENCOLHE (e rola) quando os campos não cabem — nunca CRESCE: crescer
+     * criaria espaço em branco entre o último campo e os botões (é ele que segura o
+     * crescimento, jamais os botões). Sem padding em baixo e sem rolagem lateral: a
+     * janela tem largura FIXA e quem se ajusta a ela é o conteúdo (`border-box` nos
+     * campos). */
+    .corpo {
+      flex: 0 1 auto;
+      min-height: 0;
+      padding: 12px 12px 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    /* O último campo não deixa margem pendurada: quem separa do botão é o bloco de
+     * botões (o `padding-top` dele), um respiro só. */
+    .corpo > *:last-child { margin-bottom: 0; }
     .vaga {
       margin: 0 0 8px;
       font-size: 12px;
@@ -66,21 +78,26 @@
       background: #eaf2fb;
       border-radius: 8px;
       padding: 6px 8px;
+      overflow-wrap: anywhere;
       -webkit-user-select: text;
       user-select: text;
     }
-    .msg { margin: 0 0 10px; font-size: 12.5px; }
-    .campo { margin: 0 0 10px; }
+    .msg { margin: 0 0 10px; font-size: 12.5px; overflow-wrap: anywhere; }
+    .campo { margin: 0 0 10px; min-width: 0; }
     .campo label {
       display: block;
       font-size: 12px;
       font-weight: 600;
       margin-bottom: 4px;
+      overflow-wrap: anywhere;
       -webkit-user-select: text;
       user-select: text;
     }
     .campo input, .campo select {
+      box-sizing: border-box; /* 100% É a largura do campo, padding incluído */
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       padding: 7px 9px;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
@@ -91,7 +108,10 @@
       -webkit-user-select: text;
       user-select: text;
     }
-    .acoes { display: flex; gap: 8px; padding: 0 12px; } /* a margem de baixo é da janela (ver ajustarAltura) */
+    /* O `padding-top` é o respiro entre o último campo e os botões — e, por ser
+     * padding, entra na conta da altura (o `margin` não entraria). A margem de baixo
+     * da janela é do cartão (`#cartao`), não daqui. */
+    .acoes { display: flex; gap: 8px; padding: 8px 12px 0; }
     .acoes button {
       flex: 1;
       padding: 9px;

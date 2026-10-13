@@ -121,23 +121,27 @@ const CHROME_FALSO = `
     },
   });
 
-  /* Numa página da extensão que vive numa JANELA (a janelinha), a altura da PÁGINA
-   * segue a janela — é o que o Chrome faz de verdade. Sem isto, o CSS do cartão
-   * (que preenche a página) mediria a tela inteira do headless e o teste veria
-   * botões cortados que na vida real não acontecem. */
-  function fixarAlturaDaPagina() {
+  /* Numa página da extensão que vive numa JANELA (a janelinha), o tamanho da PÁGINA
+   * segue a janela — é o que o Chrome faz de verdade, nos dois eixos. Sem isto, o
+   * CSS do cartão (que preenche a página) mediria a tela inteira do headless e o
+   * teste veria botões cortados e campos largos demais que na vida real não
+   * acontecem. */
+  function fixarTamanhoDaPagina() {
     if (!window.__pgvJanelaDeVerdade || !document.documentElement || !document.body) return;
 
-    var px = Math.max(0, window.__pgvJanela.janela.height - window.__pgvJanela.moldura);
+    var janela = window.__pgvJanela.janela;
+    var altura = Math.max(0, janela.height - window.__pgvJanela.moldura);
 
-    document.documentElement.style.height = px + 'px';
-    document.body.style.height = px + 'px';
+    document.documentElement.style.height = altura + 'px';
+    document.documentElement.style.width = janela.width + 'px';
+    document.body.style.height = altura + 'px';
+    document.body.style.width = janela.width + 'px';
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fixarAlturaDaPagina);
+    document.addEventListener('DOMContentLoaded', fixarTamanhoDaPagina);
   } else {
-    fixarAlturaDaPagina();
+    fixarTamanhoDaPagina();
   }
 
   window.chrome = {
@@ -204,7 +208,7 @@ const CHROME_FALSO = `
         var janela = Object.assign({}, window.__pgvJanela.janela, info || {}, { id: id });
         window.__pgvJanela.janela = janela;
         window.__pgvJanela.atualizacoes.push(info || {});
-        fixarAlturaDaPagina();
+        fixarTamanhoDaPagina();
         if (typeof cb === 'function') setTimeout(function () { cb(janela); }, 0);
         return Promise.resolve(janela);
       }
@@ -365,15 +369,17 @@ function montarPagina(opcoes) {
         .replace(/src="([^"/:]+\.js)"/g, 'src="file://' + raiz + '/$1"')
         .replace(
           /<script/,
-          `<pre id="pgv-saida"></pre><pre id="pgv-logs"></pre>${dados}<script>${CHROME_FALSO}</script>\n<script`
+          '<pre id="pgv-saida" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>' +
+            '<pre id="pgv-logs" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>' +
+            `${dados}<script>${CHROME_FALSO}</script>\n<script`
         )
         .replace('</body>', scripts + '\n</body>')
     : `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>PegaVaga - ${opcoes.titulo || 'etapa'}</title></head>
 <body>
 ${opcoes.corpo}
-<pre id="pgv-saida"></pre>
-<pre id="pgv-logs"></pre>
+<pre id="pgv-saida" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+<pre id="pgv-logs" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
 ${dados}
 <script>${CHROME_FALSO}</script>
 ${scripts}
@@ -414,7 +420,7 @@ function rodar(orcamentoMs, consulta) {
 
 /** Lê as linhas `OK`/`FALHA` da página e as reporta no teste do Node. */
 function reportar(dom) {
-  const trecho = /<pre id="pgv-saida">([\s\S]*?)<\/pre>/.exec(dom);
+  const trecho = /<pre id="pgv-saida"[^>]*>([\s\S]*?)<\/pre>/.exec(dom);
 
   if (!trecho) {
     console.log('  FALHA a pagina nao devolveu a saida do teste');
@@ -448,7 +454,7 @@ function reportar(dom) {
 function mostrarLogs(dom) {
   if (!falhas) return;
 
-  const comLogs = /<pre id="pgv-logs">([\s\S]*?)<\/pre>/.exec(dom);
+  const comLogs = /<pre id="pgv-logs"[^>]*>([\s\S]*?)<\/pre>/.exec(dom);
   if (!comLogs) return;
 
   const doPegaVaga = comLogs[1]

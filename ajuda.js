@@ -152,10 +152,17 @@
       if (pedido === alturaAtual) return; // sem mudança: não fica batendo na janela
       alturaAtual = pedido;
 
+      /* A largura vai JUNTA: é a janela que manda no eixo X (o conteúdo quebra
+       * dentro dela). Se o gerenciador de janelas recusar mexer na largura, tentamos
+       * só a altura — o que importa de verdade é o conteúdo caber sem cortar. */
       try {
-        await chrome.windows.update(id, { height: pedido });
+        await chrome.windows.update(id, { width: MEDIDAS.largura, height: pedido });
       } catch (error) {
-        return; // o sistema recusou redimensionar: o corpo rola dentro do que veio
+        try {
+          await chrome.windows.update(id, { height: pedido });
+        } catch (recusa) {
+          return; // o sistema recusou redimensionar: o corpo rola dentro do que veio
+        }
       }
 
       await respirar(90);

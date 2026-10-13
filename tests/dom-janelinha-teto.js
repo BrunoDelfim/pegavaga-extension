@@ -12,7 +12,10 @@
 (async function () {
   try {
     /* A moldura é ajustada em passos: esperamos ela parar antes de medir. */
-    await esperar(() => window.__pgvJanela.atualizacoes.length >= 2, 6000);
+    await esperar(
+      () => window.__pgvJanela.atualizacoes.some((u) => u && (u.left != null || u.top != null)),
+      6000
+    );
 
     const janela = window.__pgvJanela.janela;
     const corpo = document.querySelector('.corpo');
@@ -26,6 +29,23 @@
       'quem rola e o CORPO (o cartao nao estoura a janela)',
       corpo.scrollHeight > corpo.clientHeight,
       'conteudo=' + corpo.scrollHeight + ' visivel=' + corpo.clientHeight
+    );
+
+    /* Rolagem só na vertical: a barra LATERAL significa campo mais largo que a
+     * largura fixa da janela (é o `width: 100%` + padding sem `border-box`). */
+    const pagina = document.body;
+
+    ok(
+      'nem com muitos campos aparece barra de rolagem LATERAL',
+      corpo.scrollWidth <= corpo.clientWidth + 1 && pagina.scrollWidth <= pagina.clientWidth + 1,
+      'corpo=' +
+        corpo.scrollWidth +
+        '/' +
+        corpo.clientWidth +
+        ' pagina=' +
+        pagina.scrollWidth +
+        '/' +
+        pagina.clientWidth
     );
 
     const caixa = acoes.getBoundingClientRect();

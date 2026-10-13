@@ -86,9 +86,12 @@
     /* A JANELA: altura do conteúdo, canto inferior direito e posição guardada */
     /* ---------------------------------------------------------------------- */
 
-    /* A moldura da janela é ajustada em passos (a altura casa com o conteúdo e a
-     * posição vem depois): esperamos as atualizações antes de conferir. */
-    await esperar(() => window.__pgvJanela.atualizacoes.length >= 2, 6000);
+    /* A moldura da janela é ajustada em passos: primeiro a altura (algumas idas e
+     * voltas) e depois a posição. Esperamos o passo da POSIÇÃO — é o último. */
+    await esperar(
+      () => window.__pgvJanela.atualizacoes.some((u) => u && (u.left != null || u.top != null)),
+      6000
+    );
 
     const janela = window.__pgvJanela.janela;
     const cartao = document.getElementById('cartao');
@@ -116,6 +119,45 @@
         ateOMargem +
         ' janela=' +
         janela.height
+    );
+
+    /* A largura é FIXA e o conteúdo quebra dentro dela: nada de barra de rolagem
+     * lateral (o corpo tem `overflow-y: auto`, o que torna o eixo X rolável). O
+     * `body` é quem tem a largura da janela — é nele que a conta fecha. */
+    const corpo = document.querySelector('.corpo');
+    const pagina = document.body;
+
+    ok(
+      'sem barra de rolagem LATERAL (o conteudo cabe na largura fixa)',
+      corpo.scrollWidth <= corpo.clientWidth + 1 && pagina.scrollWidth <= pagina.clientWidth + 1,
+      'corpo=' +
+        corpo.scrollWidth +
+        '/' +
+        corpo.clientWidth +
+        ' pagina=' +
+        pagina.scrollWidth +
+        '/' +
+        pagina.clientWidth
+    );
+
+    /* E sem espaço em branco: o último campo termina onde o corpo termina (sem o
+     * padding de baixo sobrando) e os botões começam logo depois — 8px, o respiro
+     * do próprio bloco de botões. */
+    const ultimoCampo = Array.prototype.slice
+      .call(document.querySelectorAll('#campos .campo'))
+      .pop();
+    const acoes = document.querySelector('.acoes');
+
+    ok(
+      'os botoes colam no ultimo campo (sem espaco em branco)',
+      Boolean(ultimoCampo && acoes) &&
+        Math.abs(
+          acoes.getBoundingClientRect().top - ultimoCampo.getBoundingClientRect().bottom - 8
+        ) <= 2,
+      'campo ate=' +
+        (ultimoCampo ? Math.round(ultimoCampo.getBoundingClientRect().bottom) : '?') +
+        ' botoes em=' +
+        (acoes ? Math.round(acoes.getBoundingClientRect().top) : '?')
     );
 
     const MARGEM = 16;
