@@ -2280,6 +2280,24 @@
       // UI custom (o `<select>` sem caixa) também conta.
       if (!campo || !visivelOuControle(campo) || vistos.length >= TETO) return;
       if (vistosEl.has(campo)) return;
+
+      /* RÁDIO/CHECKBOX de um grupo: quem representa a PERGUNTA é a primeira opção
+       * do grupo. Sem isto o MESMO grupo entrava uma vez por bolinha — o
+       * `aria-required="true"` está em CADA `<input type=radio>` do LinkedIn (ver o
+       * HTML real em `tests/fixtures/linkedin-etapa-radios.html`), então o laço dos
+       * obrigatórios anotava as quatro bolinhas e o cartão trazia a mesma pergunta
+       * quatro vezes. */
+      if (ehOpcaoDeEscolha(campo)) {
+        const grupo = opcoesDoGrupo(campo);
+        if (grupo.length > 1 && grupo[0] !== campo) return;
+
+        const raiz = raizDoGrupo(campo);
+        const jaTemGrupo = vistos.some(
+          (item) => item.campo && ehOpcaoDeEscolha(item.campo) && raizDoGrupo(item.campo) === raiz
+        );
+        if (jaTemGrupo) return;
+      }
+
       vistosEl.add(campo);
 
       vistos.push({ descricao: descreverCampo(campo, modal), campo: campo });
@@ -4245,14 +4263,25 @@
         const aria = clean(no.getAttribute('aria-label') || '');
         if (aria) return aria.slice(0, 300);
 
-        const rotulo =
-          no.querySelector &&
-          no.querySelector(
-            'legend, .fb-dash-form-element__label, .jobs-easy-apply-form-element__label, ' +
-              '.artdeco-text-input--label'
-          );
-        if (rotulo) {
-          const texto = clean(rotulo.textContent);
+        /* O rótulo da pergunta, do mais ESPECÍFICO para o mais genérico.
+         *
+         * A ordem importa e não pode ser um seletor só: o `querySelector` com
+         * lista devolve o primeiro na ORDEM DO DOCUMENTO, e o `<legend>` (ancestral)
+         * ganharia do `<span class="fb-dash-form-element__label">` — arrastando o
+         * "Obrigatório" escondido junto (foi o que o HTML real do LinkedIn mostrou:
+         * `<legend>` = pergunta + `<span class="visually-hidden">Obrigatório</span>`). */
+        const rotulos = [
+          '.fb-dash-form-element__label',
+          '.jobs-easy-apply-form-element__label',
+          '.artdeco-text-input--label',
+          'legend',
+        ];
+
+        for (const seletor of rotulos) {
+          const el = no.querySelector && no.querySelector(seletor);
+          if (!el) continue;
+
+          const texto = clean(el.textContent);
           if (texto) return texto.slice(0, 300);
         }
       }
@@ -4292,6 +4321,16 @@
     const ehInput = tag === 'input';
 
     try {
+      /* O LinkedIn põe o texto da OPÇÃO num `data-` do próprio input no Easy Apply
+       * (`data-test-text-selectable-option__input="Yes"`, como no HTML real): é o
+       * rótulo mais direto que existe e não depende de `<label>`/CSS. */
+      const dataOpcao = clean(
+        (input.getAttribute && input.getAttribute('data-test-text-selectable-option__input')) ||
+          (input.getAttribute && input.getAttribute('data-test-selectable-option__input')) ||
+          ''
+      );
+      if (dataOpcao && dataOpcao.length <= 80) return dataOpcao;
+
       if (ehInput && input.labels && input.labels.length) {
         const label = input.labels[0];
 
